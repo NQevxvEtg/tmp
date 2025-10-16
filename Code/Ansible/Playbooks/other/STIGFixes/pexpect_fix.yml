@@ -1,0 +1,82 @@
+- name: Identify reachable hosts
+  hosts: all
+  become: true  
+  gather_facts: false
+  strategy: linear
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - block:
+        - name: Quick check for SSH connection readiness
+          ansible.builtin.wait_for_connection:
+            timeout: 5 # Fail fast if no SSH connection
+          delegate_to: "{{ inventory_hostname }}" # Ensure this runs against the target host
+
+        - name: Add device to general 'reachable' group
+          ansible.builtin.group_by:
+            key: "reachable"
+            # No need for ansible_hostname here for the general group, it's just 'reachable'
+
+      rescue:
+        - name: Mark unreachable host
+          ansible.builtin.debug:
+            msg: "Host {{ inventory_hostname }} is unreachable within the initial check. Skipping."
+          # No need to create a group for unreachable. The absence from 'reachable' implies unreachability.
+
+- name: Start tasks
+  ignore_unreachable: yes
+  hosts: reachable
+  become: true
+  vars_files:
+    - ../../vaults/vbox_vault.yml  
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: "/var/ansible_tmp"
+    # Define python/pip paths as variables
+    python_executable: "/usr/bin/python3.12"
+    pip_executable: "/usr/local/bin/pip3.12"
+
+  tasks:
+
+    - name: Create a temporary directory on the target host
+      ansible.builtin.file:
+        path: "{{ ansible_remote_tmp }}/pip_install"
+        state: directory
+        mode: '1777'
+    
+    - name: Sync the entire pip_wheels directory to the target
+      ansible.posix.synchronize:
+        src: files/pip_wheels/
+        dest: "{{ ansible_remote_tmp }}/pip_install/"
+        mode: 'push'
+        archive: no    # Disables -rltpgoD (including -t for times, -g for group, -o for owner)
+        recursive: yes # Ensure subdirectories are copied
+      become: false
+    
+    - name: Bootstrap pip for the non-system Python interpreter
+      ansible.builtin.command:
+        cmd: >
+          /usr/bin/python3.12
+          {{ ansible_remote_tmp }}/pip_install/get-pip.py
+          --no-index
+          --find-links={{ ansible_remote_tmp }}/pip_install
+        creates: /usr/local/bin/pip3.12
+    
+    - name: Install pexpect and its dependencies using pip command
+      ansible.builtin.command:
+        cmd: >
+          {{ pip_executable }} install
+          --no-index
+          --find-links "{{ ansible_remote_tmp }}/pip_install"
+          pexpect packaging
+        # This checks if pexpect is already installed to make the task idempotent
+        creates: "{{ '/usr/local/lib/python3.12/site-packages/pexpect' }}"
+    
+    - name: Clean up the temporary directory and files
+      ansible.builtin.file:
+        path: "{{ ansible_remote_tmp }}/pip_install"
+        state: absent

@@ -1,0 +1,33 @@
+---
+- name: Enable SELinux in Enforcing mode (Simple)
+  hosts: all
+  become: yes
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - name: Ensure SELINUX=enforcing is set in /etc/selinux/config (PERSISTENT)
+      ansible.builtin.lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: 'SELINUX=enforcing'
+        state: present
+      register: config_change
+
+    - name: Get current SELinux running status
+      ansible.builtin.command: /usr/sbin/getenforce
+      register: current_status
+      changed_when: false
+      
+    - name: Set SELinux to Enforcing mode immediately (RUNTIME)
+      ansible.builtin.command: /usr/sbin/setenforce 1
+      when: current_status.stdout != "Disabled" and current_status.stdout != "Enforcing"
+      # This task runs ONLY if SELinux is not Disabled and is not already Enforcing.
+      
+    - name: ⚠️ ACTION REQUIRED | Manual Reboot Needed
+      ansible.builtin.debug:
+        msg: "A **MANUAL REBOOT** of {{ inventory_hostname }} is REQUIRED to apply the permanent SELinux change."
+      when: config_change.changed

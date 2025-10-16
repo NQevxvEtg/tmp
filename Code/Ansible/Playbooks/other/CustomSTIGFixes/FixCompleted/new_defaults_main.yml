@@ -1,0 +1,225 @@
+# R-230226 RHEL-08-010050
+rhel8STIG_stigrule_230226_Manage: True
+rhel8STIG_stigrule_230226__etc_dconf_db_local_d_01_banner_message_Value: "'You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel misconduct (PM), law enforcement (LE), and counterintelligence (CI) investigations.\n-At any time, the USG may inspect and seize data stored on this IS.\n-Communications using, or data stored on, this IS are not private, are subject to routine monitoring, interception, and search, and may be disclosed or used for any USG-authorized purpose.\n-This IS includes security measures (e.g., authentication and access controls) to protect USG interests--not for your personal benefit or privacy.\n-Notwithstanding the above, using this IS does not constitute consent to PM, LE or CI investigative searching or monitoring of the content of privileged communications, or work product, related to personal representation or services by attorneys, psychotherapists, or clergy, and their assistants. Such communications and work product are private and confidential. See User Agreement for details. '"
+# R-230229 RHEL-08-010090
+rhel8STIG_stigrule_230229_Manage: True
+# R-230233 RHEL-08-010130
+rhel8STIG_stigrule_230233_Manage: True
+# R-230251 RHEL-08-010290
+rhel8STIG_stigrule_230251_Manage: True
+rhel8STIG_stigrule_230251_opensshserver_config_MACs_Line: "-oMACs=hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+# R-230252 RHEL-08-010291
+rhel8STIG_stigrule_230252_Manage: True
+rhel8STIG_stigrule_230252_opensshserver_config_Ciphers_Line: "-oCiphers=aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr"
+# R-230256 RHEL-08-010295
+rhel8STIG_stigrule_230256_Manage: True
+rhel8STIG_stigrule_230256__etc_crypto_policies_back_ends_gnutls_config_Line: '+VERS-ALL:-VERS-DTLS0.9:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.1:-VERS-DTLS1.0'
+# R-230274 RHEL-08-010400
+rhel8STIG_stigrule_230274_Manage: True
+rhel8STIG_stigrule_230274_sssd_cert_verification_Line: "certificate_verification = ocsp_dgst=sha1"
+# R-230277 RHEL-08-010421
+rhel8STIG_stigrule_230277_Manage: True
+rhel8STIG_stigrule_230277_grub_cmdline_page_poison_Value: "page_poison=1"
+# R-230278 RHEL-08-010422
+rhel8STIG_stigrule_230278_Manage: True
+rhel8STIG_stigrule_230278_grub_cmdline_vsyscall_Value: "vsyscall=none"
+# R-230279 RHEL-08-010423
+rhel8STIG_stigrule_230279_Manage: True
+rhel8STIG_stigrule_230279_grub_cmdline_init_on_free_Value: "init_on_free=1"
+# R-230299 RHEL-08-010570
+rhel8STIG_stigrule_230299_Manage: True
+rhel8STIG_stigrule_230299_home_nosuid_MountOption: 'nosuid'
+# R-230302 RHEL-08-010590
+rhel8STIG_stigrule_230302_Manage: True
+rhel8STIG_stigrule_230302_home_noexec_MountOption: 'noexec'
+# R-230311 RHEL-08-010671
+rhel8STIG_stigrule_230311_Manage: True
+rhel8STIG_stigrule_230311__etc_sysctl_d_99_sysctl_conf_Line: 'kernel.core_pattern=|/bin/false'
+rhel8STIG_stigrule_230311_kernel_core_pattern_Value: '|/bin/false'
+# R-230312 RHEL-08-010672
+rhel8STIG_stigrule_230312_Manage: True
+rhel8STIG_stigrule_230312_systemd_coredump_socket_Masked: true
+# R-230316 RHEL-08-010680
+rhel8STIG_stigrule_230316_Manage: True
+rhel8STIG_stigrule_230316_nameserver_1: '192.168.1.2'
+rhel8STIG_stigrule_230316_nameserver_2: '192.168.1.3'
+# R-230321 RHEL-08-010730
+rhel8STIG_stigrule_230321_Manage: True
+rhel8STIG_stigrule_230321_home_dir_mode: '0750'
+# R-230333 RHEL-08-020011
+rhel8STIG_stigrule_230333_Manage: True
+rhel8STIG_stigrule_230333_faillock_deny_Value: '3'
+# R-230335 RHEL-08-020013
+rhel8STIG_stigrule_230335_Manage: True
+rhel8STIG_stigrule_230335_faillock_fail_interval_Value: '900'
+# R-230337 RHEL-08-020015
+rhel8STIG_stigrule_230337_Manage: True
+rhel8STIG_stigrule_230337_faillock_unlock_time_Value: '0'
+# R-230339 RHEL-08-020017
+rhel8STIG_stigrule_230339_Manage: True
+rhel8STIG_stigrule_230339_faillock_dir_Value: '/var/log/faillock'
+# R-230341 RHEL-08-020019
+rhel8STIG_stigrule_230341_Manage: True
+rhel8STIG_stigrule_230341_faillock_silent_Enabled: True
+# R-230343 RHEL-08-020021
+rhel8STIG_stigrule_230343_Manage: True
+rhel8STIG_stigrule_230343_faillock_audit_Enabled: True
+# R-230345 RHEL-08-020023
+rhel8STIG_stigrule_230345_Manage: True
+rhel8STIG_stigrule_230345_faillock_even_deny_root_Enabled: True
+# R-230351 RHEL-08-020050
+rhel8STIG_stigrule_230351_Manage: True
+rhel8STIG_stigrule_230351_smartcard_removal_action_Value: "'lock-screen'"
+# R-230364 RHEL-08-020180
+rhel8STIG_stigrule_230364_Manage: True
+rhel8STIG_stigrule_230364_min_password_age_Value: '1'
+# R-230372 RHEL-08-020250
+rhel8STIG_stigrule_230372_Manage: False
+rhel8STIG_stigrule_230372_sssd_pam_cert_auth_Value: 'True'
+rhel8STIG_stigrule_230372_pam_sss_cert_auth_Option: 'try_cert_auth'
+# R-230373 RHEL-08-020260
+rhel8STIG_stigrule_230373_Manage: True
+rhel8STIG_stigrule_230373_useradd_inactive_Value: '35'
+# R-230466 RHEL-08-030590
+rhel8STIG_stigrule_230466_Manage: True
+rhel8STIG_stigrule_230466__etc_audit_rules_d_audit_rules__var_log_faillock_Line: '-w /var/log/faillock -p wa -k logins'
+# R-230475 RHEL-08-030650
+rhel8STIG_stigrule_230475_Manage: True
+rhel8STIG_stigrule_230475_aide_config_audit_tools:
+  - "/usr/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512"
+  - "/usr/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512"
+  - "/usr/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512"
+  - "/usr/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512"
+  - "/usr/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512"
+  - "/usr/sbin/rsyslogd p+i+n+u+g+s+b+acl+xattrs+sha512"
+  - "/usr/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512"
+# R-230479 RHEL-08-030690
+rhel8STIG_stigrule_230479_Manage: True
+rhel8STIG_stigrule_230479_rsyslog_remote_server: "logaggregationserver.example.mil"
+rhel8STIG_stigrule_230479_rsyslog_remote_port: "[port]"
+rhel8STIG_stigrule_230479_rsyslog_remote_protocol: "@@" # Use @@ for TCP, @ for UDP
+# R-230484 RHEL-08-030740
+rhel8STIG_stigrule_230484_Manage: True
+rhel8STIG_stigrule_230484_chrony_ntp_server: "0.us.pool.ntp.mil"
+rhel8STIG_stigrule_230484_chrony_maxpoll_Value: "16"
+# R-230503 RHEL-08-040080
+rhel8STIG_stigrule_230503_Manage: True
+rhel8STIG_stigrule_230503_usb_storage_blacklist: True
+# R-230504 RHEL-08-040090
+rhel8STIG_stigrule_230504_Manage: True
+rhel8STIG_stigrule_230504_firewalld_default_zone: 'custom' # Replace 'custom' with your desired zone name
+# R-230508 RHEL-08-040120
+rhel8STIG_stigrule_230508_Manage: True
+rhel8STIG_stigrule_230508_dev_shm_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230509 RHEL-08-040121
+rhel8STIG_stigrule_230509_Manage: True
+rhel8STIG_stigrule_230509_dev_shm_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230510 RHEL-08-040122
+rhel8STIG_stigrule_230510_Manage: True
+rhel8STIG_stigrule_230510_dev_shm_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230511 RHEL-08-040123
+rhel8STIG_stigrule_230511_Manage: True
+rhel8STIG_stigrule_230511_tmp_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230512 RHEL-08-040124
+rhel8STIG_stigrule_230512_Manage: True
+rhel8STIG_stigrule_230512_tmp_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230513 RHEL-08-040125
+rhel8STIG_stigrule_230513_Manage: True
+rhel8STIG_stigrule_230513_tmp_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230514 RHEL-08-040126
+rhel8STIG_stigrule_230514_Manage: True
+rhel8STIG_stigrule_230514_var_log_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230515 RHEL-08-040127
+rhel8STIG_stigrule_230515_Manage: True
+rhel8STIG_stigrule_230515_var_log_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230516 RHEL-08-040128
+rhel8STIG_stigrule_230516_Manage: True
+rhel8STIG_stigrule_230516_var_log_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230517 RHEL-08-040129
+rhel8STIG_stigrule_230517_Manage: True
+rhel8STIG_stigrule_230517_var_log_audit_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230518 RHEL-08-040130
+rhel8STIG_stigrule_230518_Manage: True
+rhel8STIG_stigrule_230518_var_log_audit_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230519 RHEL-08-040131
+rhel8STIG_stigrule_230519_Manage: True
+rhel8STIG_stigrule_230519_var_log_audit_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230520 RHEL-08-040132
+rhel8STIG_stigrule_230520_Manage: True
+rhel8STIG_stigrule_230520_var_tmp_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230521 RHEL-08-040133
+rhel8STIG_stigrule_230521_Manage: True
+rhel8STIG_stigrule_230521_var_tmp_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230522 RHEL-08-040134
+rhel8STIG_stigrule_230522_Manage: True
+rhel8STIG_stigrule_230522_var_tmp_mount_options: "defaults,nodev,nosuid,noexec"
+# R-230523 RHEL-08-040135
+rhel8STIG_stigrule_230523_Manage: True
+rhel8STIG_stigrule_230523_fapolicyd_State: 'installed'
+# R-230524 RHEL-08-040140
+rhel8STIG_stigrule_230524_Manage: True
+rhel8STIG_stigrule_230524_usbguard_policy_Command: "usbguard generate-policy > /etc/usbguard/rules.conf"
+# R-230532 RHEL-08-040180
+rhel8STIG_stigrule_230532_Manage: True
+rhel8STIG_stigrule_230532_debug_shell_Masked: true
+# R-230546 RHEL-08-040282
+rhel8STIG_stigrule_230546_Manage: True
+rhel8STIG_stigrule_230546__etc_sysctl_d_99_sysctl_conf_Line: 'kernel.yama.ptrace_scope = 1'
+rhel8STIG_stigrule_230546_kernel_yama_ptrace_scope_Value: 1
+# R-237642 RHEL-08-010383
+rhel8STIG_stigrule_237642_Manage: True
+rhel8STIG_stigrule_237642_sudo_targetpw_Line: 'Defaults !targetpw'
+rhel8STIG_stigrule_237642_sudo_rootpw_Line: 'Defaults !rootpw'
+rhel8STIG_stigrule_237642_sudo_runaspw_Line: 'Defaults !runaspw'
+# R-237643 RHEL-08-010384
+rhel8STIG_stigrule_237643_Manage: True
+rhel8STIG_stigrule_237643_sudo_timestamp_timeout_Value: '0'
+# R-244530 RHEL-08-010572
+rhel8STIG_stigrule_244530_Manage: True
+rhel8STIG_stigrule_244530_boot_efi_nosuid_MountOption: 'nosuid'
+# R-244531 RHEL-08-010731
+rhel8STIG_stigrule_244531_Manage: True
+rhel8STIG_stigrule_244531_home_dir_file_mode: '0750'
+# R-244533 RHEL-08-020025
+rhel8STIG_stigrule_244533_Manage: False
+rhel8STIG_stigrule_244533_pam_faillock_system_auth: True
+# R-244534 RHEL-08-020026
+rhel8STIG_stigrule_244534_Manage: False
+rhel8STIG_stigrule_244534_pam_faillock_password_auth: True
+# R-244536 RHEL-08-020032
+rhel8STIG_stigrule_244536_Manage: True
+rhel8STIG_stigrule_244536__etc_dconf_db_local_d_02_login_screen_Value: 'true'
+# R-244545 RHEL-08-040136
+rhel8STIG_stigrule_244545_Manage: True
+rhel8STIG_stigrule_244545_fapolicyd_Enabled: True
+# R-244546 RHEL-08-040137
+rhel8STIG_stigrule_244546_Manage: False
+rhel8STIG_stigrule_244546_fapolicyd_permissive_Mode: '0'
+rhel8STIG_stigrule_244546_fapolicyd_deny_all_Rule: 'deny perm=any all : all'
+# R-244547 RHEL-08-040139
+rhel8STIG_stigrule_244547_Manage: True
+rhel8STIG_stigrule_244547_usbguard_State: 'installed'
+# R-244548 RHEL-08-040141
+rhel8STIG_stigrule_244548_Manage: True
+rhel8STIG_stigrule_244548_usbguard_Enabled: True
+# R-250317 RHEL-08-010359
+rhel8STIG_stigrule_250317_Manage: True
+rhel8STIG_stigrule_250317_aide_State: 'installed'
+# R-251716 RHEL-08-020104
+rhel8STIG_stigrule_251716_Manage: True
+rhel8STIG_stigrule_251716_pwquality_retry_Value: '3'
+# R-251718 RHEL-08-040321
+rhel8STIG_stigrule_251718_Manage: True
+rhel8STIG_stigrule_251718_default_target: 'multi-user.target'
+# R-257258 RHEL-08-020035
+rhel8STIG_stigrule_257258_Manage: True
+rhel8STIG_stigrule_257258_StopIdleSessionSec_Value: '600'
+# R-272482 RHEL-08-010296
+rhel8STIG_stigrule_272482_Manage: True
+rhel8STIG_stigrule_272482_openssh_client_MACs_Line: "-oMACs=hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+# R-272483 RHEL-08-010297
+rhel8STIG_stigrule_272483_Manage: True
+rhel8STIG_stigrule_272483_openssh_client_Ciphers_Line: "-oCiphers=aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr"
+# R-272484 RHEL-08-010455
+rhel8STIG_stigrule_272484_Manage: True
+rhel8STIG_stigrule_272484_sudo_selinux_context: '%{designated_group_or_user_name} ALL=(ALL) TYPE=sysadm_t ROLE=sysadm_r ALL'

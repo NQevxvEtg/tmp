@@ -1,0 +1,109 @@
+- name: Identify reachable hosts
+  hosts: all
+  become: true  
+  gather_facts: false
+  strategy: linear
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - block:
+        - name: Quick check for SSH connection readiness
+          ansible.builtin.wait_for_connection:
+            timeout: 5 # Fail fast if no SSH connection
+          delegate_to: "{{ inventory_hostname }}" # Ensure this runs against the target host
+
+        - name: Add device to general 'reachable' group
+          ansible.builtin.group_by:
+            key: "reachable"
+            # No need for ansible_hostname here for the general group, it's just 'reachable'
+
+      rescue:
+        - name: Mark unreachable host
+          ansible.builtin.debug:
+            msg: "Host {{ inventory_hostname }} is unreachable within the initial check. Skipping."
+          # No need to create a group for unreachable. The absence from 'reachable' implies unreachability.
+
+- name: Run STIG Fixes
+  ignore_unreachable: yes
+  hosts: reachable
+  become: true
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    ansible_remote_tmp: /var/ansible_tmp
+    src_to_remote: "{{ playbook_dir }}/Oracle/OL8/"
+    remote_playbook_dir: "/var/ansible_tmp/STIGFIX/"
+
+  tasks:
+    - name: Install ansible-core if not present
+      ansible.builtin.shell:
+        cmd: dnf install -y ansible-core
+      args:
+        creates: /usr/bin/ansible-playbook
+
+    - name: Ensure STIGFIX directory exists on remote host
+      ansible.builtin.file:
+        path: "{{ remote_playbook_dir }}"
+        state: directory
+        mode: '1777'
+
+    - name: Synchronize script directory
+      ansible.posix.synchronize:
+        src: "{{ src_to_remote }}"
+        dest: "{{ remote_playbook_dir }}"
+        mode: push
+        archive: no
+        recursive: yes
+      become: false
+
+    - name: Make the remote script executable
+      ansible.builtin.file:
+        path: "{{ remote_playbook_dir }}enforce.sh"
+        mode: '0755'
+
+    # Securely create the vault password file on the remote host first.
+    # This task is placed before the block that uses it.
+    - name: Create a temporary vault password file
+      ansible.builtin.copy:
+        content: "{{ enforce_script_pass }}"
+        dest: "{{ remote_playbook_dir }}vault_pass.txt"
+        mode: '0600' # Restrictive permissions are crucial for security
+      no_log: true # CRITICAL: Prevents the vault password from being logged.
+
+    # Use a block to ensure the password file is always cleaned up.
+    - name: Run STIG script and ensure cleanup
+      block:
+        - name: Execute script asynchronously
+          ansible.builtin.command:
+            # We now call the script non-interactively, passing the password file path.
+            # Using relative paths is cleaner since we set the working directory with chdir.
+            cmd: "./enforce.sh ./vault_pass.txt"
+            chdir: "{{ remote_playbook_dir }}"
+          become: true
+          async: 3600
+          poll: 0
+          register: script_job
+          # This no_log is good practice but not as critical as the copy task's.
+          no_log: true
+
+        - name: Wait for the asynchronous script to complete
+          ansible.builtin.async_status:
+            jid: "{{ script_job.ansible_job_id }}"
+          register: async_result
+          until: async_result.finished
+          retries: 360 # Check every 10 seconds for an hour
+          delay: 10
+          become: true # async_status needs become if the original task used it.
+
+      always:
+        # This task will run whether the block succeeded or failed.
+        - name: Clean up
+          ansible.builtin.file:
+            path: "{{ remote_playbook_dir }}"
+            state: absent
+          become: true

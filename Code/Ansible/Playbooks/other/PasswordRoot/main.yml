@@ -1,0 +1,45 @@
+- name: Identify reachable hosts
+  hosts: all
+  become: true  
+  gather_facts: false
+  strategy: linear
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp  
+  tasks:
+    - block:
+        - name: Quick check for SSH connection readiness
+          ansible.builtin.wait_for_connection:
+            timeout: 5 # Fail fast if no SSH connection
+          delegate_to: "{{ inventory_hostname }}" # Ensure this runs against the target host
+
+        - name: Add device to general 'reachable' group
+          ansible.builtin.group_by:
+            key: "reachable"
+            # No need for ansible_hostname here for the general group, it's just 'reachable'
+
+      rescue:
+        - name: Mark unreachable host
+          ansible.builtin.debug:
+            msg: "Host {{ inventory_hostname }} is unreachable within the initial check. Skipping."
+          # No need to create a group for unreachable. The absence from 'reachable' implies unreachability.
+
+- name: Initiate Reboot via Shell and Poll for System Readiness
+  # This part now runs *only* on hosts already identified as 'reachable'
+  hosts: reachable # Target only the hosts confirmed reachable
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Ensure root password is set
+      ansible.builtin.user:
+        name: root
+        # The password_hash filter hashes the plaintext password using SHA512.
+        # This is important because the 'password' parameter expects a hashed password.
+        password: "{{ root_password_hashed }}"
+        update_password: always # 'on_create' means it updates if the user exists, or sets if new.
+                                   # 'always' would force an update every time the playbook runs.
+      no_log: false # Prevent sensitive password from appearing in logs
+
+# Run this command on a secure Linux machine
+# openssl passwd -6 -salt $(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16) -stdin
+# Then type your password and press Enter.

@@ -1,0 +1,1 @@
+ansible-galaxy collection download community.general ansible.posix

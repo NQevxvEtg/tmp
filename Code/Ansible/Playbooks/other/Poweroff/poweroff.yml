@@ -1,0 +1,19 @@
+---
+- name: Gracefully Power Off Systems
+  hosts: all
+  become: yes
+  gather_facts: no
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - name: Execute system poweroff command
+      ansible.builtin.command: /usr/sbin/poweroff
+      # IMPORTANT: This command ends the connection and will report a 'FAILED'
+      # status in Ansible because the host shuts down before Ansible receives 
+      # a successful completion message (rc=0). This is expected behavior for 
+      # shutdown tasks and can be ignored.
+      ignore_errors: true

@@ -1,0 +1,99 @@
+- name: Identify reachable hosts
+  hosts: all
+  become: true  
+  gather_facts: false
+  strategy: linear
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp  
+  tasks:
+    - block:
+        - name: Quick check for SSH connection readiness
+          ansible.builtin.wait_for_connection:
+            timeout: 5 # Fail fast if no SSH connection
+          delegate_to: "{{ inventory_hostname }}" # Ensure this runs against the target host
+
+        - name: Add device to general 'reachable' group
+          ansible.builtin.group_by:
+            key: "reachable"
+            # No need for ansible_hostname here for the general group, it's just 'reachable'
+
+      rescue:
+        - name: Mark unreachable host
+          ansible.builtin.debug:
+            msg: "Host {{ inventory_hostname }} is unreachable within the initial check. Skipping."
+          # No need to create a group for unreachable. The absence from 'reachable' implies unreachability.
+
+- name: Initiate Reboot via Shell and Poll for System Readiness
+  # This part now runs *only* on hosts already identified as 'reachable'
+  hosts: reachable # Target only the hosts confirmed reachable
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Ensure the GRUB user.cfg directory exists
+      ansible.builtin.file:
+        path: /boot/efi/EFI/redhat/ # Adjust path if not RHEL/CentOS/Fedora UEFI
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Add GRUB superuser and password to user.cfg
+      ansible.builtin.blockinfile:
+        path: /boot/efi/EFI/redhat/user.cfg # This is the target file for STIG compliance
+        block: |
+          set superusers="{{ grub_superuser }}"
+          password_pbkdf2 {{ grub_superuser }} {{ grub_password_hashed }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK FOR GRUB PASSWORD"
+        create: yes # Create the file if it doesn't exist
+        mode: '0600' # STIG-compliant permissions: Only root can read/write
+        owner: root
+        group: root
+      no_log: true # Prevent sensitive password hash from appearing in logs
+
+    - name: Ensure GRUB_ENABLE_CRYPTODISK is set in /etc/default/grub
+      # This is often needed for password protection to work correctly,
+      # even if you don't have encrypted disks.
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_ENABLE_CRYPTODISK='
+        line: 'GRUB_ENABLE_CRYPTODISK="y"'
+        state: present
+        backup: yes # Always good to have a backup when modifying critical files
+
+    - name: Ensure GRUB_TERMINAL is set for password prompt
+      # This ensures the password prompt appears on the console.
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_TERMINAL='
+        line: 'GRUB_TERMINAL="console"'
+        state: present
+        backup: yes
+
+    - name: Regenerate GRUB configuration
+      ansible.builtin.command: grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+      # IMPORTANT: Adjust the output path (-o) to match your system's active grub.cfg.
+      # Common paths:
+      # - RHEL/CentOS/Fedora (UEFI): /boot/efi/EFI/redhat/grub.cfg
+      # - RHEL/CentOS/Fedora (BIOS): /boot/grub2/grub.cfg
+      # - Debian/Ubuntu: /boot/grub/grub.cfg
+      changed_when: true # This command always reports changed, so we force it.
+      # notify: Reboot for GRUB changes (if needed) # Uncomment if a reboot is desired after changes
+
+  # handlers:
+  #   - name: Reboot for GRUB changes (if needed)
+  #     ansible.builtin.reboot:
+  #       reboot_timeout: 600 # Wait up to 10 minutes for reboot
+  #     listen: "Reboot for GRUB changes (if needed)"
+  #     # Only uncomment and use this handler if a reboot is absolutely required
+  #     # for your specific GRUB setup to take effect immediately.
+  #     # Generally, GRUB changes take effect on the next boot without a reboot.
+
+
+# On a Linux system (your control node or a temporary VM)
+# Install grub2-common/grub2-tools-extra if grub2-mkpasswd-pbkdf2 is not found
+# For Debian/Ubuntu: sudo apt install grub2-common
+# For RHEL/CentOS/Fedora: sudo yum install grub2-tools-extra
+
+# run command like this
+# grub2-mkpasswd-pbkdf2

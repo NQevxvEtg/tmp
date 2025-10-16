@@ -1,0 +1,41 @@
+- name: Deploy Offline Collections to Multiple Hosts
+  gather_facts: false
+  ignore_unreachable: yes
+  hosts: all
+  become: true
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    remote_temp_path: "/var/ansible_tmp/offline_collections"
+    source_files_path: "{{ playbook_dir }}/../../files/offline_collections"
+
+  tasks:
+    - name: Deploy and Install Collections with Guaranteed Cleanup
+      block:
+        - name: 🏷️ Create a temporary directory on each target host
+          ansible.builtin.file:
+            path: "{{ remote_temp_path }}"
+            state: directory
+            mode: '0755'
+
+        - name: 📦 Copy the offline collections to the remote host
+          ansible.builtin.copy:
+            src: "{{ source_files_path }}/collections/"
+            dest: "{{ remote_temp_path }}/"
+
+        - name: ⚙️ Install collections from the local source
+          ansible.builtin.command:
+            # -r requirements.yml : Use the requirements file in the temp directory.
+            # -p . : Look for collection tarballs in the current directory.
+            # --force : Ensure the correct version is installed over any existing ones.
+            cmd: ansible-galaxy collection install --force -r requirements.yml -p .
+            chdir: "{{ remote_temp_path }}"
+          register: install_result
+          changed_when: "'installing collection' in install_result.stdout"
+
+      always:
+        - name: 🧹 Clean up the temporary directory on the remote host
+          ansible.builtin.file:
+            path: "{{ remote_temp_path }}"
+            state: absent

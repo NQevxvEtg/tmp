@@ -1,0 +1,20 @@
+---
+- name: Prepare servers with Python 3.12 interpreter
+  hosts: all
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - name: Install Python 3.12 using the 'raw' module
+      ansible.builtin.raw: "dnf install -y python3.12"
+      register: raw_result
+      changed_when: "'Nothing to do' not in raw_result.stdout"
+
+    - name: Show confirmation
+      ansible.builtin.debug:
+        msg: "Bootstrap complete. Python 3.12 should now be installed at /usr/bin/python3.12"

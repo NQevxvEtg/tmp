@@ -1,0 +1,23 @@
+---
+- name: Disable SELinux permanently (Simple)
+  hosts: all
+  become: yes
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - name: Ensure SELINUX=disabled is set in /etc/selinux/config (PERSISTENT)
+      # This is the ONLY way to truly disable SELinux permanently.
+      # A manual reboot is required for this change to take effect in the kernel.
+      ansible.builtin.lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: 'SELINUX=disabled'
+        state: present
+        
+    - name: ⚠️ WARNING | SELinux disabled. Manual reboot required.
+      ansible.builtin.debug:
+        msg: "SELinux is set to 'disabled' in the config file. A MANUAL REBOOT of {{ inventory_hostname }} is required for this change to take full effect."

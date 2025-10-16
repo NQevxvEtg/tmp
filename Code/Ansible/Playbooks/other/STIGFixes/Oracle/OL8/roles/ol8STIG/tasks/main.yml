@@ -1,0 +1,217 @@
+- name: populate package facts
+  package_facts:
+
+# R-248531 OL08-00-010090
+- name: stigrule_248531_copy_root_ca
+  ansible.builtin.copy:
+    src: "{{ ol8STIG_stigrule_248531_ca_src }}"
+    dest: "{{ ol8STIG_stigrule_248531_ca_dest }}"
+    owner: "{{ ol8STIG_stigrule_248531_ca_owner }}"
+    group: "{{ ol8STIG_stigrule_248531_ca_group }}"
+    mode: "{{ ol8STIG_stigrule_248531_ca_mode }}"
+    backup: yes # Keep a backup of the original file
+  when: ol8STIG_stigrule_248531_Manage
+
+# R-248535 OL08-00-010130
+- name: stigrule_248535__etc_login_defs
+  lineinfile:
+    path: /etc/login.defs
+    regexp: '^SHA_CRYPT_MIN_ROUNDS'
+    line: "{{ ol8STIG_stigrule_248535__etc_login_defs_Line }}"
+    create: yes
+  when:
+    - ol8STIG_stigrule_248535_Manage  
+
+# R-248537 OL08-08-010140
+# grub2-mkpasswd-pbkdf2 or grub-mkpasswd-pbkdf2
+- name: stigrule_248537_set_grub2_password_uefi
+  lineinfile:
+    path: /boot/efi/EFI/redhat/user.cfg
+    regexp: '^GRUB2_PASSWORD='
+    line: "GRUB2_PASSWORD=\"{{ ol8STIG_stigrule_248537_grub_hashed_password }}\""
+    create: yes
+    mode: '0600'
+    owner: root
+    group: root
+  when:
+    - ol8STIG_stigrule_248537_Manage
+  no_log: false
+
+- name: stigrule_248537_update_grub_cfg
+  command: grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+  when:
+    - ol8STIG_stigrule_248537_Manage
+
+# R-248553 OL08-00-010201
+- name: stigrule_248553_ClientAliveInterval
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '(?i)^\s*ClientAliveInterval\s+'
+    line: "{{ ol8STIG_stigrule_248553_ClientAliveInterval_Line }}"
+  notify: ssh_restart
+  when:
+    - ol8STIG_stigrule_248553_Manage
+    - "'openssh-server' in packages"
+
+# R-248561 OL08-00-010290
+- name: stigrule_248561_configure_ssh_server_macs
+  ansible.builtin.lineinfile:
+    path: "{{ lookup('pipe', 'readlink -f /etc/crypto-policies/back-ends/opensshserver.config') }}"
+    regexp: '^(-oMACs=).*' # Match the line starting with -oMACs=
+    line: '{{ ol8STIG_stigrule_248561_opensshserver_config_MACs_Line }}' # The exact desired line content
+    backup: yes
+  when: ol8STIG_stigrule_248561_Manage
+
+
+# R-248562 OL08-00-010291
+- name: stigrule_248562_configure_ssh_server_ciphers
+  ansible.builtin.lineinfile:
+    path: "{{ lookup('pipe', 'readlink -f /etc/crypto-policies/back-ends/opensshserver.config') }}"
+    regexp: '^(-oCiphers=).*' # Match the line starting with -oCiphers=
+    line: '{{ ol8STIG_stigrule_248562_opensshserver_config_Ciphers_Line }}' # The exact desired line content
+    backup: yes
+  when: ol8STIG_stigrule_248562_Manage
+
+# R-248592 OL08-00-010423
+- name: stigrule_248592_set_init_on_free_kernel_arg
+  command: "grubby --update-kernel=ALL --args=\"{{ ol8STIG_stigrule_248592_kernel_arg }}\""
+  when: ol8STIG_stigrule_248592_Manage
+
+- name: stigrule_248592_regenerate_grub_config
+  command: "grub2-mkconfig -o /boot/grub2/grub.cfg"
+  when: ol8STIG_stigrule_248592_Manage
+
+# R-248629 OL08-00-010671
+# 1. Remove conflicting entry from the main sysctl configuration file.
+- name: stigrule_248629_remove_from_sysctl_conf
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^kernel\.core_pattern\s*='
+    state: absent
+  when: ol8STIG_stigrule_248629_Manage
+
+# 2a. Find all sysctl configuration files in lower-precedence directories.
+- name: stigrule_248629_find_sysctl_d_files
+  ansible.builtin.find:
+    paths:
+      - /run/sysctl.d
+      - /usr/local/lib/sysctl.d
+      - /usr/lib/sysctl.d
+      - /lib/sysctl.d
+    file_type: file
+  register: found_sysctl_files
+  when: ol8STIG_stigrule_248629_Manage
+
+# 2b. Remove conflicting entry from the files found above.
+- name: stigrule_248629_remove_from_sysctl_d_files
+  ansible.builtin.lineinfile:
+    path: "{{ item.path }}"
+    regexp: '^kernel\.core_pattern\s*='
+    state: absent
+  loop: "{{ found_sysctl_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: ol8STIG_stigrule_248629_Manage
+
+# 3. Set the correct, compliant value in the highest precedence file and reload.
+- name: stigrule_248629_set_kernel_core_pattern_and_reload
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.d/99-sysctl.conf
+    regexp: '^kernel\.core_pattern\s*='
+    line: "kernel.core_pattern = {{ ol8STIG_stigrule_248629_kernel_core_pattern }}"
+    state: present
+    create: yes
+    mode: '0644'
+  notify: sysctl_load_settings
+  when: ol8STIG_stigrule_248629_Manage
+
+
+# R-248800 OL08-00-030580
+- name: kmod remove old rules
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/audit.rules
+    # Matches any line starting with -w or -a that contains /usr/bin/kmod
+    regexp: '^(?:-w|-a).+\/usr\/bin\/kmod'
+    state: absent
+  register: stigrule_248800_remove
+  when: ol8STIG_stigrule_248800_Manage
+
+- name: kmod add compliant rule
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/audit.rules
+    line: "{{ ol8STIG_stigrule_248800_rule }}"
+    create: true
+    state: present
+    mode: '0640'
+    owner: root
+    group: root
+  register: stigrule_248800_add
+  notify: auditd_restart
+  when: ol8STIG_stigrule_248800_Manage
+
+# R-248839 OL08-00-040090
+- name: stigrule_248839 | Ensure firewalld uses a deny-all, allow-by-exception policy
+  block:
+    - name: "stigrule_248839 | Add allowed services to the '{{ ol8STIG_stigrule_248839_ZoneName }}' zone"
+      ansible.builtin.command: "firewall-cmd --zone={{ ol8STIG_stigrule_248839_ZoneName }} --add-service={{ item }}"
+      loop: "{{ ol8STIG_stigrule_248839_Allowed_Services }}"
+
+    - name: "stigrule_248839 | Add allowed ports to the '{{ ol8STIG_stigrule_248839_ZoneName }}' zone"
+      ansible.builtin.command: "firewall-cmd --zone={{ ol8STIG_stigrule_248839_ZoneName }} --add-port={{ item }}"
+      loop: "{{ ol8STIG_stigrule_248839_Allowed_Ports }}"
+
+    - name: "stigrule_248839 | Add allowed rich rules to the '{{ ol8STIG_stigrule_248839_ZoneName }}' zone"
+      ansible.builtin.command: "firewall-cmd --zone={{ ol8STIG_stigrule_248839_ZoneName }} --add-rich-rule='{{ item }}'"
+      loop: "{{ ol8STIG_stigrule_248839_Allowed_Rich_Rules }}"
+
+    - name: "stigrule_248839 | Assign interfaces to the '{{ ol8STIG_stigrule_248839_ZoneName }}' zone"
+      ansible.builtin.command: "firewall-cmd --zone={{ ol8STIG_stigrule_248839_ZoneName }} --change-interface={{ item }}"
+      loop: "{{ ol8STIG_stigrule_248839_Interfaces }}"
+
+    # This register is still needed for the 'when' condition on the next task
+    - name: stigrule_248839 | Get current default firewalld zone
+      ansible.builtin.command: "firewall-cmd --get-default-zone"
+      register: current_default_zone
+      changed_when: false
+      check_mode: false
+
+    - name: "stigrule_248839 | Set '{{ ol8STIG_stigrule_248839_ZoneName }}' as the default zone"
+      ansible.builtin.command: "firewall-cmd --set-default-zone={{ ol8STIG_stigrule_248839_ZoneName }}"
+      when: "current_default_zone.stdout != ol8STIG_stigrule_248839_ZoneName"
+
+    # This task now runs every time
+    - name: stigrule_248839 | Persist the new runtime configuration to permanent
+      ansible.builtin.command: "firewall-cmd --runtime-to-permanent"
+
+  when: ol8STIG_stigrule_248839_Manage
+
+# R-248890 OL08-00-040282
+- name: "stigrule_248890 | Ensure kernel.yama.ptrace_scope is configured"
+  block:
+
+    # Step 1: Ensure the setting is persistent in a config file.
+    - name: "Ensure kernel.yama.ptrace_scope is persistent in /etc/sysctl.d/"
+      ansible.builtin.lineinfile:
+        path: /etc/sysctl.d/99-sysctl.conf
+        regexp: '^kernel\.yama\.ptrace_scope\s*='
+        line: "kernel.yama.ptrace_scope = {{ ol8STIG_stigrule_248890_kernel_yama_ptrace_scope_Value }}"
+        state: present
+        create: true
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Step 2 & 3: Ensure the setting is applied to the live kernel now.
+    - name: "Get current live value for kernel.yama.ptrace_scope"
+      ansible.builtin.command: "sysctl -n kernel.yama.ptrace_scope"
+      register: current_ptrace_scope
+      changed_when: false
+      check_mode: false
+
+    - name: "Set live kernel value for kernel.yama.ptrace_scope if needed"
+      ansible.builtin.command: "sysctl -w kernel.yama.ptrace_scope={{ ol8STIG_stigrule_248890_kernel_yama_ptrace_scope_Value }}"
+      when: "current_ptrace_scope.stdout | string != '{{ ol8STIG_stigrule_248890_kernel_yama_ptrace_scope_Value }}'"
+      changed_when: true
+
+  when:
+    - ol8STIG_stigrule_248890_Manage

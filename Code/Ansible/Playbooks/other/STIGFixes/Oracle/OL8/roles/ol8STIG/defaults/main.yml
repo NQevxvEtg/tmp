@@ -1,0 +1,62 @@
+# R-248531 OL08-00-010090
+ol8STIG_stigrule_248531_Manage: True
+ol8STIG_stigrule_248531_ca_src: "files/DoD_PKE_CA_chain.pem" 
+ol8STIG_stigrule_248531_ca_dest: /etc/sssd/pki/sssd_auth_ca_db.pem
+ol8STIG_stigrule_248531_ca_owner: root
+ol8STIG_stigrule_248531_ca_group: root
+ol8STIG_stigrule_248531_ca_mode: '0644'
+
+# R-248535 OL08-00-010130
+ol8STIG_stigrule_248535_Manage: True
+ol8STIG_stigrule_248535__etc_login_defs_Line: 'SHA_CRYPT_MIN_ROUNDS 10000'
+
+# R-248537 OL08-00-010140
+ol8STIG_stigrule_248537_Manage: True
+ol8STIG_stigrule_248537_grub_hashed_password: "grub.pbkdf2.sha512.10000.3296908A10FD04D0EF8E26BE32D697A6E3AA799D0223B68C6FDC4A5D4C428FD4F28E954C70074804A6FDC5C3CE26FADE34DE78C58476CE544419C3D063D76C36.9249D2D7FB358D844D85982CB31FA56A0E1138874BBFE61DB47D902D70A050EEE0D58A7F1A708C28F350B8B4327194585E07F98E486E261AAE8469A179B3AD38"
+
+# R-248553 OL08-00-010201
+ol8STIG_stigrule_248553_Manage: True
+ol8STIG_stigrule_248553_ClientAliveInterval_Line: ClientAliveInterval 600
+
+# R-248561 OL08-00-010290
+ol8STIG_stigrule_248561_Manage: True
+ol8STIG_stigrule_248561_opensshserver_config_MACs_Line: "-oMACs=hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+
+# R-248562 OL08-00-010291
+ol8STIG_stigrule_248562_Manage: True
+ol8STIG_stigrule_248562_opensshserver_config_Ciphers_Line: "-oCiphers=aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr"
+
+# R-248592 OL08-00-010423
+ol8STIG_stigrule_248592_Manage: True
+ol8STIG_stigrule_248592_kernel_arg: init_on_free=1
+
+# R-248629 OL08-00-010671
+ol8STIG_stigrule_248629_Manage: True
+ol8STIG_stigrule_248629_kernel_core_pattern: "|/bin/false"
+
+# R-248800 OL08-00-030580
+ol8STIG_stigrule_248800_Manage: True
+ol8STIG_stigrule_248800_rule: -w /usr/bin/kmod -p x -k modules
+
+# R-248839 OL08-00-040090
+ol8STIG_stigrule_248839_Manage: True
+ol8STIG_stigrule_248839_ZoneName: 'drop'
+ol8STIG_stigrule_248839_Interfaces:
+  - 'enp0s3'
+
+# Allowed services by name (e.g., ssh, http, https)
+ol8STIG_stigrule_248839_Allowed_Services:
+  - 'ssh'
+
+# Allowed ports (e.g., 80/tcp, 443/tcp)
+ol8STIG_stigrule_248839_Allowed_Ports:
+  - '80/tcp'   # HTTP
+  - '443/tcp'  # HTTPS
+
+# Allowed rich rules for more complex firewall exceptions
+ol8STIG_stigrule_248839_Allowed_Rich_Rules:
+  - 'rule family="ipv4" source address="10.0.2.0/24" accept'
+
+# R-248890 OL08-00-040282
+ol8STIG_stigrule_248890_Manage: True
+ol8STIG_stigrule_248890_kernel_yama_ptrace_scope_Value: 1

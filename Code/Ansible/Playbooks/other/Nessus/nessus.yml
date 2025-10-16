@@ -1,0 +1,60 @@
+---
+- name: Patch Nessus Agent (Offline / No Central Console)
+  hosts: nessus_agents
+  become: true # Required for package installation
+  gather_facts: true # Needed to determine OS family for package type
+
+  vars:
+    # Path to the Nessus Agent installer file on your Ansible control node.
+    # YOU MUST REPLACE THIS WITH THE ACTUAL PATH TO YOUR DOWNLOADED FILE.
+    nessus_agent_installer_path: "/path/to/your/downloaded/NessusAgent-<version>.<arch>.<pkg_ext>"
+    # Example: "/tmp/NessusAgent-10.8.2-debian6_amd64.deb"
+    # Example: "/tmp/NessusAgent-10.8.2-es7.x86_64.rpm"
+
+    # Temporary directory on the remote target to store the installer.
+    remote_tmp_dir: "/tmp"
+
+  tasks:
+    - name: Ensure Nessus Agent service is stopped before upgrade
+      ansible.builtin.systemd:
+        name: nessusagent
+        state: stopped
+      # It's generally safer to stop the service before upgrading.
+      # Ignore errors if the service doesn't exist or isn't running,
+      # as this might be an initial install or a broken agent.
+      ignore_errors: true
+
+    - name: Copy Nessus Agent installer to remote host
+      ansible.builtin.copy:
+        src: "{{ nessus_agent_installer_path }}"
+        dest: "{{ remote_tmp_dir }}/{{ nessus_agent_installer_path | basename }}"
+        mode: '0644'
+
+    - name: Install/Upgrade Nessus Agent package
+      ansible.builtin.package:
+        name: "{{ remote_tmp_dir }}/{{ nessus_agent_installer_path | basename }}"
+        state: present
+      # The 'package' module will detect the appropriate package manager (apt/yum/dnf)
+      # based on 'ansible_facts.os_family' and handle the installation.
+
+    - name: Clean up Nessus Agent installer from remote host
+      ansible.builtin.file:
+        path: "{{ remote_tmp_dir }}/{{ nessus_agent_installer_path | basename }}"
+        state: absent
+
+    - name: Ensure Nessus Agent service is running after upgrade
+      ansible.builtin.systemd:
+        name: nessusagent
+        state: started
+        enabled: yes
+
+    - name: (Optional) Verify Nessus Agent version after patch
+      ansible.builtin.command: /opt/nessus/sbin/nessuscli -v
+      register: agent_version_output
+      changed_when: false
+      failed_when: false # Allow command to fail if path is wrong or agent not installed
+
+    - name: Display new Nessus Agent version
+      ansible.builtin.debug:
+        msg: "Nessus Agent version: {{ agent_version_output.stdout_lines }}"
+      when: agent_version_output.stdout is defined and agent_version_output.stdout | length > 0

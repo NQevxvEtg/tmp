@@ -1,0 +1,9 @@
+- hosts: localhost
+  gather_facts: true
+  vars_files: 
+    - group_vars/all/vault.yml
+  roles:
+    # - rhel8STIG
+    # - cat1
+    # - cat2
+    - cat3

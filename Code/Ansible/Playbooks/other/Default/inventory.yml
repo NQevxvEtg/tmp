@@ -1,0 +1,12 @@
+all:
+  hosts:
+    rhel8:
+      ansible_host: 127.0.0.1
+      ansible_port: 2221
+      ansible_user: admin
+      ansible_ssh_private_key_file: ~/.ssh/id_rsa_vbox
+    ol9:
+      ansible_host: 127.0.0.1
+      ansible_port: 2222
+      ansible_user: admin
+      ansible_ssh_private_key_file: ~/.ssh/id_rsa_vbox
