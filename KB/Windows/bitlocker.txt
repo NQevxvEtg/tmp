@@ -1,3 +1,0 @@
-manage-bde -status
-
-manage-bde -status c:
