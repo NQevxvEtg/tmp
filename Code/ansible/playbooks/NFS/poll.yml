@@ -20,15 +20,52 @@
       changed_when: false
       check_mode: false
 
-    - name: Get I/O data (raw bytes for top processes)
-      shell: >
-        for pid in $(fuser -m {{ slow_mount }} 2>/dev/null); do
-          comm=$(ps -p $pid -o comm=)
-          rchar=$(grep 'rchar' /proc/$pid/io 2>/dev/null | awk -F: '{print $2}') || rchar=0
-          wchar=$(grep 'wchar' /proc/$pid/io 2>/dev/null | awk -F: '{print $2}') || wchar=0
-          [ "$rchar" -ne 0 ] && echo "PID $pid ($comm): rchar:$rchar"
-          [ "$wchar" -ne 0 ] && echo "PID $pid ($comm): wchar:$wchar"
-        done | head -5
+    - name: Get I/O data (formatted bytes via embedded script for top processes)
+      shell: |
+        #!/bin/bash
+        # Full script for formatting PID I/O in human-readable units (MiB/KiB/GiB).
+        # Uses numfmt (from util-linux) if available; else awk calculation.
+        #
+        mount="{{ slow_mount }}"
+        pids=$(fuser -m "$mount" 2>/dev/null)
+        for pid in $pids; do
+          if [ -d "/proc/$pid" ]; then
+            comm=$(ps -p $pid -o comm=)
+            rchar=$(grep 'rchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}')
+            wchar=$(grep 'wchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}')
+            
+            # Function to format bytes (with fallback to raw)
+            format_bytes() {
+              bytes=$1
+              if [ "$bytes" -eq 0 ]; then
+                echo "$bytes"
+                return
+              fi
+              if command -v numfmt >/dev/null 2>&1; then
+                # Preferred: Use numfmt for accurate MiB/KiB/etc.
+                numfmt --to=iec-i --suffix=B "$bytes" | sed 's/B$//'
+              else
+                # Fallback: Simple awk division for readable units
+                awk -v b="$bytes" 'BEGIN {
+                  if (b >= 1073741824) { printf "%.1f GiB", b / 1073741824 }
+                  else if (b >= 1048576) { printf "%.1f MiB", b / 1048576 }
+                  else if (b >= 1024) { printf "%.1f KiB", b / 1024 }
+                  else { printf "%.0f B", b }
+                }'
+              fi
+            }
+            
+            # Output only if non-zero
+            if [ "$rchar" -ne 0 ]; then
+              formatted_rchar=$(format_bytes "$rchar")
+              echo "PID $pid ($comm): rchar $formatted_rchar"
+            fi
+            if [ "$wchar" -ne 0 ]; then
+              formatted_wchar=$(format_bytes "$wchar")
+              echo "PID $pid ($comm): wchar $formatted_wchar"
+            fi
+          fi
+        done | head -10
       register: io_out
       ignore_errors: yes
       changed_when: false
@@ -82,13 +119,7 @@
           {% if io_results and io_results.stdout_lines %}
           # Process I/O Data (formatted bytes):
           {% for io_line in io_results.stdout_lines %}
-          {# Parse raw I/O line: e.g., "PID 1234 (java): rchar:5000000" or "PID 1234 (java): wchar:20000000" #}
-          {%- set parts = io_line.split(': ') -%}
-          {%- set pid_comm = parts[0] -%}
-          {%- set metric_value = parts[1] -%}
-          {%- set metric, value_str = metric_value.split(':') -%}
-          {%- set formatted_value = value_str | int | filesizeformat -%}
-          - {{ pid_comm }}: {{ metric }}:{{ formatted_value }}
+          - {{ io_line }}
           {% endfor %}
           {% else %}
           # No I/O data available.
