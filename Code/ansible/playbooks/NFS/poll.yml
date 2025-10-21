@@ -1,5 +1,5 @@
 ---
-- name: Poll Live NFS Mount Usage and Bandwidth
+- name: Poll Live NFS Mount Usage and Bandwidth (with Troubleshooting)
   hosts: all
   become: true
   gather_facts: true  # Required for ansible_play_hosts and hostvars
@@ -12,6 +12,18 @@
     output_file: "{{ playbook_dir }}/../../files/mount_usage_report.txt"
 
   tasks:
+    - name: Check if mount is active
+      shell: mount | grep "{{ slow_mount }}"
+      register: mount_check
+      ignore_errors: yes
+      changed_when: false
+      check_mode: false
+
+    - name: Debug mount check (fail playbook if mount not found)
+      fail:
+        msg: "Mount {{ slow_mount }} not found or inactive. Output: {{ mount_check.stdout | default('Empty') }}"
+      when: mount_check.rc != 0
+
     - name: Get user/process counts (fast via fuser)
       shell: >
         fuser -v {{ slow_mount }} | awk 'NR>2 {print $1, $2, $NF}' | sort | uniq -c | sort -nr | head -10 || echo 'No active users'
@@ -20,31 +32,51 @@
       changed_when: false
       check_mode: false
 
-    - name: Get I/O data (formatted bytes via embedded script for top processes)
+    - name: Get PIDs using fallback lsof (if fuser fails)
+      shell: >
+        lsof +f -- "{{ slow_mount }}" | awk 'NR>1 {print $2}' | sort | uniq || fuser -m "{{ slow_mount }}"
+      register: pids_out
+      ignore_errors: yes
+      changed_when: false
+      check_mode: false
+
+    - name: Debug PID list retrieved
+      debug:
+        msg: "PIDs found for {{ slow_mount }}: {{ pids_out.stdout | default('None') }}"
+
+    - name: Get I/O data (formatted bytes via enhanced script for all processes, with debug and path details)
       shell: |
         #!/bin/bash
-        # Full script for formatting PID I/O in human-readable units (MiB/KiB/GiB).
-        # Uses numfmt (from util-linux) if available; else awk calculation.
-        #
+        # Enhanced script: Shows ALL pids (even zero I/O), full comm, paths (exe/cwd), timestamps, and totals.
+        # Includes raw+formatted bytes for troubleshooting.
         mount="{{ slow_mount }}"
-        pids=$(fuser -m "$mount" 2>/dev/null)
+        pids=$(fuser -m "$mount" 2>/dev/null || {{ hostvars[inventory_hostname].pids_out.stdout | default('') }})
+        timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        pid_count=$(echo "$pids" | wc -w)
+        echo "Timestamp: $timestamp"
+        echo "Total PIDs found: $pid_count"
         for pid in $pids; do
           if [ -d "/proc/$pid" ]; then
             comm_full=$(ps -p $pid -o args= | tr '\n' ' ')
-            comm_truncated=$(echo "$comm_full" | cut -c1-120)  # Truncate to prevent overly long lines
-            rchar=$(grep 'rchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}')
-            wchar=$(grep 'wchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}')
+            comm_truncated=$(echo "$comm_full" | cut -c1-120)
+            if ! comm_full=$(ps -p $pid -o args= 2>/dev/null); then
+              comm_full="N/A (pid exited?)"
+              comm_truncated="$comm_full"
+            fi
+            exe_path=$(readlink -f /proc/$pid/exe 2>/dev/null | tr '\n' ' ' || echo 'N/A')
+            cwd_path=$(readlink -f /proc/$pid/cwd 2>/dev/null | tr '\n' ' ' || echo 'N/A')
+            uid=$(grep '^Uid:' /proc/$pid/status 2>/dev/null | awk '{print $2}' || echo 'N/A')
+            rchar=$(grep '^rchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}' || echo '0')
+            wchar=$(grep '^wchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}' || echo '0')
             
-            # Function to format bytes (with fallback to raw)
+            # Function to format bytes
             format_bytes() {
               bytes=$1
               if [ "$bytes" -eq 0 ]; then
                 echo "$bytes B"
               elif command -v numfmt >/dev/null 2>&1; then
-                # Preferred: Use numfmt for accurate MiB/KiB/etc.
                 numfmt --to=iec-i --suffix=B "$bytes"
               else
-                # Fallback: Simple awk division for readable units
                 awk -v b="$bytes" 'BEGIN {
                   if (b >= 1073741824) { printf "%.1f GiB", b / 1073741824 }
                   else if (b >= 1048576) { printf "%.1f MiB", b / 1048576 }
@@ -54,17 +86,18 @@
               fi
             }
             
-            # Output only if non-zero
-            if [ "$rchar" -ne 0 ]; then
-              formatted_rchar=$(format_bytes "$rchar")
-              echo "PID $pid ($comm_truncated): rchar $formatted_rchar"
-            fi
-            if [ "$wchar" -ne 0 ]; then
-              formatted_wchar=$(format_bytes "$wchar")
-              echo "PID $pid ($comm_truncated): wchar $formatted_wchar"
-            fi
+            # Always output, including zeros, with raw values for debug and paths
+            formatted_rchar=$(format_bytes "$rchar")
+            formatted_wchar=$(format_bytes "$wchar")
+            echo "PID $pid (UID: $uid, Comm: $comm_truncated):"
+            echo "  Exe Path: $exe_path"
+            echo "  CWD Path: $cwd_path"
+            echo "  I/O: rchar $formatted_rchar (raw: $rchar B), wchar $formatted_wchar (raw: $wchar B)"
+            echo ""  # Blank line for readability
+          else
+            echo "PID $pid: /proc/$pid not found (process exited)"
           fi
-        done | head -10
+        done | head -50  # Increased limit; remove head to see all (multi-line per PID)
       register: io_out
       ignore_errors: yes
       changed_when: false
@@ -78,6 +111,17 @@
       changed_when: false
       check_mode: false
 
+    - name: Display troubleshooting summary per host (debug)
+      debug:
+        msg: |
+          Host: {{ inventory_hostname }}
+          Mount check: {{ mount_check.stdout_lines | default(['No output']) }}
+          PIDs count: {{ pids_out.stdout.split() | length }}
+          Users output (first 5): {{ users_out.stdout_lines[:5] | default(['Empty']) }}
+          I/O samples (first 5): {{ io_out.stdout_lines[:5] | default(['Empty']) }}
+          I/O status: {{ 'Success' if io_out.rc == 0 else 'Failed (RC: ' + io_out.rc|string + ')' }}
+      when: inventory_hostname in groups.all  # For host-specific debug
+
     - name: Get primary group of the playbook runner (for file permissions)
       delegate_to: localhost
       ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
@@ -90,6 +134,7 @@
         content: |
           # Combined NFS Mount Usage and Bandwidth Report
           # Generated at: {{ ansible_date_time.iso8601 }}
+          # With Troubleshooting Notes: Includes raw PID data, timestamps, totals, and enhanced process paths/info.
           # -------------------------------------------------------------
           # This report only includes servers with active NFS mount usage or I/O data.
           
@@ -97,14 +142,23 @@
           {%- set users_results = hostvars[host].get('users_out') -%}
           {%- set io_results = hostvars[host].get('io_out') -%}
           {%- set bw_results = hostvars[host].get('iostat_out') -%}
+          {%- set pid_results = hostvars[host].get('pids_out') -%}
           
           {% if (users_results and users_results.stdout_lines and 'No active users' not in users_results.stdout_lines) or
                 (io_results and io_results.stdout_lines) or
-                (bw_results and bw_results.stdout_lines) %}
+                (bw_results and bw_results.stdout_lines) or
+                (pid_results and pid_results.stdout) %}
           
           ---
           # Report for: {{ host }}
           ---
+          
+          {% if pid_results and pid_results.stdout %}
+          # Raw PIDs Retrieved: {{ pid_results.stdout }}
+          # Total PIDs: {{ pid_results.stdout.split() | length }}
+          {% else %}
+          # No PIDs retrieved.
+          {% endif %}
           
           {% if users_results and users_results.stdout_lines and 'No active users' not in users_results.stdout_lines %}
           # Active Users/Processes:
@@ -116,9 +170,9 @@
           {% endif %}
           
           {% if io_results and io_results.stdout_lines %}
-          # Process I/O Data (formatted bytes):
+          # Process I/O Data (formatted bytes, including zero I/O for debug, with paths):
           {% for io_line in io_results.stdout_lines %}
-          - {{ io_line }}
+          {{ io_line }}
           {% endfor %}
           {% else %}
           # No I/O data available.
