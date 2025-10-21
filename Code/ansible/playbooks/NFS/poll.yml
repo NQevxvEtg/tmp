@@ -13,19 +13,26 @@
 
   tasks:
     - name: Get user/process counts
-      command: lsof +D {{ slow_mount }} | grep -v COMMAND | cut -d' ' -f1,3 | sort | uniq -c | sort -nr | head -10
+      shell: >
+        lsof +D {{ slow_mount }} | grep -v COMMAND | cut -d' ' -f1,3 | sort | uniq -c | sort -nr | head -10
       register: users_out
       ignore_errors: yes
 
     - name: Get I/O rates (top processes)
-      command: for pid in $(fuser -m {{ slow_mount }} 2>/dev/null); do echo "PID $pid ($(ps -p $pid -o comm=)): $(grep -E 'rchar|wchar' /proc/$pid/io 2>/dev/null | tr '\\n' ' ')"; done | head -5
+      shell: >
+        for pid in $(fuser -m {{ slow_mount }} 2>/dev/null); do
+          echo "PID $pid ($(ps -p $pid -o comm=)): $(grep -E 'rchar|wchar' /proc/$pid/io 2>/dev/null | tr '\n' ' ' 2>/dev/null || echo 'No IO data')";
+        done | head -5
       register: io_out
       ignore_errors: yes
 
     - name: Get total mount I/O
-      command: iostat -dx 1 2 | grep {{ slow_mount | basename }}
+      shell: >
+        iostat -dx 1 2 | grep -oP "{{ slow_mount | basename }}.*" | tail -1
       register: iostat_out
       ignore_errors: yes
+
+
 
     - name: Aggregate per host
       set_fact:
