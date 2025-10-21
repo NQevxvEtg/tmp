@@ -20,24 +20,15 @@
       changed_when: false
       check_mode: false
 
-    - name: Get I/O rates (top processes, human-readable)
+    - name: Get I/O data (raw bytes for top processes)
       shell: >
-        output=""
         for pid in $(fuser -m {{ slow_mount }} 2>/dev/null); do
           comm=$(ps -p $pid -o comm=)
           rchar=$(grep 'rchar' /proc/$pid/io 2>/dev/null | awk -F: '{print $2}') || rchar=0
           wchar=$(grep 'wchar' /proc/$pid/io 2>/dev/null | awk -F: '{print $2}') || wchar=0
-          if [ "$rchar" -ne 0 ] || [ "$wchar" -ne 0 ]; then
-            rchar_formatted=$(echo $rchar | numfmt --to=iec-i --suffix=B --field=1 2>/dev/null || awk -v bytes="$rchar" 'BEGIN {suf="B"; for (i=0; bytes>=1024 && i<3; i++) suf=(i==0?"Ki":"") (i==1?"Mi":"") (i==2?"Gi":"") bytes/=1024; printf "%.1f%s\n", bytes, suf}')
-            wchar_formatted=$(echo $wchar | numfmt --to=iec-i --suffix=B --field=1 2>/dev/null || awk -v bytes="$wchar" 'BEGIN {suf="B"; for (i=0; bytes>=1024 && i<3; i++) suf=(i==0?"Ki":"") (i==1?"Mi":"") (i==2?"Gi":"") bytes/=1024; printf "%.1f%s\n", bytes, suf}')
-            output="$output\nPID $pid ($comm): rchar: $rchar_formatted wchar: $wchar_formatted"
-          fi
-        done
-        if [ -n "$output" ]; then
-          echo -e "$output" | tail -n +2 | head -5  # Skip the leading newline
-        else
-          echo 'No IO data'
-        fi
+          [ "$rchar" -ne 0 ] && echo "PID $pid ($comm): rchar:$rchar"
+          [ "$wchar" -ne 0 ] && echo "PID $pid ($comm): wchar:$wchar"
+        done | head -5
       register: io_out
       ignore_errors: yes
       changed_when: false
@@ -67,19 +58,18 @@
           # This report only includes servers with active NFS mount usage or I/O data.
           
           {% for host in ansible_play_hosts %}
-          {#- Set a variable for easier access to the results for the current host -#}
-          {% set users_results = hostvars[host].get('users_out') %}
-          {% set io_results = hostvars[host].get('io_out') %}
-          {% set bw_results = hostvars[host].get('iostat_out') %}
+          {%- set users_results = hostvars[host].get('users_out') -%}
+          {%- set io_results = hostvars[host].get('io_out') -%}
+          {%- set bw_results = hostvars[host].get('iostat_out') -%}
           
-          {#- Only proceed if any results exist and contain output (e.g., not empty or 'No active users') -#}
-          {% if (users_results and users_results.stdout_lines and 'No active users' not in users_results.stdout_lines) or 
-                (io_results and io_results.stdout_lines and 'No IO data' not in io_results.stdout_lines) or 
+          {% if (users_results and users_results.stdout_lines and 'No active users' not in users_results.stdout_lines) or
+                (io_results and io_results.stdout_lines) or
                 (bw_results and bw_results.stdout_lines) %}
           
           ---
           # Report for: {{ host }}
           ---
+          
           {% if users_results and users_results.stdout_lines and 'No active users' not in users_results.stdout_lines %}
           # Active Users/Processes:
           {% for line in users_results.stdout_lines %}
@@ -89,10 +79,16 @@
           # No active users detected.
           {% endif %}
           
-          {% if io_results and io_results.stdout_lines and 'No IO data' not in io_results.stdout_lines %}
+          {% if io_results and io_results.stdout_lines %}
           # Process I/O Data (formatted bytes):
-          {% for line in io_results.stdout_lines %}
-          - {{ line }}
+          {% for io_line in io_results.stdout_lines %}
+          {# Parse raw I/O line: e.g., "PID 1234 (java): rchar:5000000" or "PID 1234 (java): wchar:20000000" #}
+          {%- set parts = io_line.split(': ') -%}
+          {%- set pid_comm = parts[0] -%}
+          {%- set metric_value = parts[1] -%}
+          {%- set metric, value_str = metric_value.split(':') -%}
+          {%- set formatted_value = value_str | int | filesizeformat -%}
+          - {{ pid_comm }}: {{ metric }}:{{ formatted_value }}
           {% endfor %}
           {% else %}
           # No I/O data available.
