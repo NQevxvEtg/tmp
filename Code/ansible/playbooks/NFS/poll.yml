@@ -1,0 +1,56 @@
+---
+- name: Poll Live NFS Mount Usage and Bandwidth
+  hosts: all
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    ansible_remote_tmp: /var/ansible_tmp
+    slow_mount: "/mnt/your_slow_mount"  # Update path
+    report_output: "{{ playbook_dir }}/../../files/mount_usage_report.txt"
+
+  tasks:
+    - name: Get user/process counts
+      command: lsof +D {{ slow_mount }} | grep -v COMMAND | cut -d' ' -f1,3 | sort | uniq -c | sort -nr | head -10
+      register: users_out
+      ignore_errors: yes
+
+    - name: Get I/O rates (top processes)
+      command: for pid in $(fuser -m {{ slow_mount }} 2>/dev/null); do echo "PID $pid ($(ps -p $pid -o comm=)): $(grep -E 'rchar|wchar' /proc/$pid/io 2>/dev/null | tr '\\n' ' ')"; done | head -5
+      register: io_out
+      ignore_errors: yes
+
+    - name: Get total mount I/O
+      command: iostat -dx 1 2 | grep {{ slow_mount | basename }}
+      register: iostat_out
+      ignore_errors: yes
+
+    - name: Aggregate per host
+      set_fact:
+        host_data: >-
+          {{ host_data | default([]) + [dict(
+            host=ansible_hostname,
+            top_users=users_out.stdout_lines | default(['No active']),
+            top_io=io_out.stdout_lines | default(['No data']),
+            total_bw=(iostat_out.stdout | regex_findall('(\\d+\\.\\d+) (\\d+\\.\\d+)') | list | default(['N/A']))
+          )] }}
+      run_once: true  # Collect all hosts
+
+    - name: Generate unified report
+      copy:
+        dest: "{{report_output}}"
+        content: |
+          # Live NFS Mount Usage and Bandwidth Report ({{ ansible_date_time.iso8601 }})
+          ## Per-Host Summary
+          {% for d in host_data if d is defined %}
+          **{{ d.host }}**
+          - Top Users/Processes: {{ d.top_users | join('; ') }}
+          - Top Process I/O (bytes): {{ d.top_io | join('; ') }}
+          - Total BW (rMB/s wMB/s %util): {{ d.total_bw | join(' ') if d.total_bw != ['N/A'] else 'Check iostat' }}
+          {% endfor %}
+          ## Insights
+          - High user counts (>50) or BW >50MB/s per client indicate heavy usage—correlate with slowness.
+          - Consistent across hosts? Server/export issue. Isolated? Client app problem (e.g., one user hogging).
+        run_once: true
