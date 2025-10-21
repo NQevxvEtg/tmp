@@ -2,7 +2,7 @@
 - name: Poll Live NFS Mount Usage and Bandwidth
   hosts: all
   become: true
-  gather_facts: false
+  gather_facts: true
   vars_files:
     - ../../vaults/vbox_vault.yml
   vars:
