@@ -12,11 +12,10 @@
     report_output: "{{ playbook_dir }}/../../files/mount_usage_report.txt"
 
   tasks:
-    - name: Get user/process counts
+    - name: Get user/process counts (fast via fuser)
       shell: >
-        lsof +D {{ slow_mount }} | grep -v COMMAND | cut -d' ' -f1,3 | sort | uniq -c | sort -nr | head -10
+        fuser -v {{ slow_mount }} | awk 'NR>2 {print $1, $2, $NF}' | sort | uniq -c | sort -nr | head -10 || echo 'No active users'
       register: users_out
-      ignore_errors: yes
 
     - name: Get I/O rates (top processes)
       shell: >
@@ -32,8 +31,6 @@
       register: iostat_out
       ignore_errors: yes
 
-
-
     - name: Aggregate per host
       set_fact:
         host_data: >-
@@ -47,7 +44,7 @@
 
     - name: Generate unified report
       copy:
-        dest: "{{report_output}}"
+        dest: "{{ report_output }}"
         content: |
           # Live NFS Mount Usage and Bandwidth Report ({{ ansible_date_time.iso8601 }})
           ## Per-Host Summary
@@ -60,4 +57,4 @@
           ## Insights
           - High user counts (>50) or BW >50MB/s per client indicate heavy usage—correlate with slowness.
           - Consistent across hosts? Server/export issue. Isolated? Client app problem (e.g., one user hogging).
-        run_once: true
+      run_once: true
