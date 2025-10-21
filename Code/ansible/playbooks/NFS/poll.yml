@@ -22,17 +22,22 @@
 
     - name: Get I/O rates (top processes, human-readable)
       shell: >
+        output=""
         for pid in $(fuser -m {{ slow_mount }} 2>/dev/null); do
-          echo -n "PID $pid ($(ps -p $pid -o comm=)): ";
-          grep -E 'rchar|wchar' /proc/$pid/io 2>/dev/null |
-            awk -F: '{printf $1 ": " $2 "|"}' |
-            sed 's/|$//' |
-            if command -v numfmt >/dev/null; then
-              awk -F: '{print $1 ": " $2 | "numfmt --to=iec-i --suffix=B"}';
-            else
-              awk -F: '{bytes=$2; suf="B"; for(i=0; bytes>=1024&&i<3; i++) {bytes/=1024; suf=(i==0?"Ki":"") (i==1?"Mi":"") (i==2?"Gi":"")} printf "%.1f%s\n", bytes, suf}';
-            fi || echo 'No IO data';
-        done | head -5
+          comm=$(ps -p $pid -o comm=)
+          rchar=$(grep 'rchar' /proc/$pid/io 2>/dev/null | awk -F: '{print $2}') || rchar=0
+          wchar=$(grep 'wchar' /proc/$pid/io 2>/dev/null | awk -F: '{print $2}') || wchar=0
+          if [ "$rchar" -ne 0 ] || [ "$wchar" -ne 0 ]; then
+            rchar_formatted=$(echo $rchar | numfmt --to=iec-i --suffix=B --field=1 2>/dev/null || awk -v bytes="$rchar" 'BEGIN {suf="B"; for (i=0; bytes>=1024 && i<3; i++) suf=(i==0?"Ki":"") (i==1?"Mi":"") (i==2?"Gi":"") bytes/=1024; printf "%.1f%s\n", bytes, suf}')
+            wchar_formatted=$(echo $wchar | numfmt --to=iec-i --suffix=B --field=1 2>/dev/null || awk -v bytes="$wchar" 'BEGIN {suf="B"; for (i=0; bytes>=1024 && i<3; i++) suf=(i==0?"Ki":"") (i==1?"Mi":"") (i==2?"Gi":"") bytes/=1024; printf "%.1f%s\n", bytes, suf}')
+            output="$output\nPID $pid ($comm): rchar: $rchar_formatted wchar: $wchar_formatted"
+          fi
+        done
+        if [ -n "$output" ]; then
+          echo -e "$output" | tail -n +2 | head -5  # Skip the leading newline
+        else
+          echo 'No IO data'
+        fi
       register: io_out
       ignore_errors: yes
       changed_when: false
