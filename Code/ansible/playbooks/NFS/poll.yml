@@ -30,7 +30,8 @@
         pids=$(fuser -m "$mount" 2>/dev/null)
         for pid in $pids; do
           if [ -d "/proc/$pid" ]; then
-            comm=$(ps -p $pid -o comm=)
+            comm_full=$(ps -p $pid -o args= | tr '\n' ' ')
+            comm_truncated=$(echo "$comm_full" | cut -c1-120)  # Truncate to prevent overly long lines
             rchar=$(grep 'rchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}')
             wchar=$(grep 'wchar' "/proc/$pid/io" 2>/dev/null | awk -F: '{print $2}')
             
@@ -38,12 +39,10 @@
             format_bytes() {
               bytes=$1
               if [ "$bytes" -eq 0 ]; then
-                echo "$bytes"
-                return
-              fi
-              if command -v numfmt >/dev/null 2>&1; then
+                echo "$bytes B"
+              elif command -v numfmt >/dev/null 2>&1; then
                 # Preferred: Use numfmt for accurate MiB/KiB/etc.
-                numfmt --to=iec-i --suffix=B "$bytes" | sed 's/B$//'
+                numfmt --to=iec-i --suffix=B "$bytes"
               else
                 # Fallback: Simple awk division for readable units
                 awk -v b="$bytes" 'BEGIN {
@@ -58,11 +57,11 @@
             # Output only if non-zero
             if [ "$rchar" -ne 0 ]; then
               formatted_rchar=$(format_bytes "$rchar")
-              echo "PID $pid ($comm): rchar $formatted_rchar"
+              echo "PID $pid ($comm_truncated): rchar $formatted_rchar"
             fi
             if [ "$wchar" -ne 0 ]; then
               formatted_wchar=$(format_bytes "$wchar")
-              echo "PID $pid ($comm): wchar $formatted_wchar"
+              echo "PID $pid ($comm_truncated): wchar $formatted_wchar"
             fi
           fi
         done | head -10
