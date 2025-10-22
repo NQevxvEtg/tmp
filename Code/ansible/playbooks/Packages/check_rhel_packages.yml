@@ -2,11 +2,14 @@
   ignore_unreachable: yes
   hosts: reachable
   become: true
-  vars_files: 
-    - ../../vaults/vbox_vault.yml  
+  vars_files:
+    - ../../vaults/vbox_vault.yml
   vars:
     ansible_become_password: "{{ remote_host_become_pass }}"
     ansible_remote_tmp: /var/ansible_tmp
+    # Assuming package_versions.txt contains lines like:
+    # kernel-4.18.0-555.69.1.el8_10
+    # openssl-1.1.1k-7.el8_8
     required_packages_raw: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() }}"
     output_file: "{{ playbook_dir }}/../../files/rhel_vulnerability_report.txt"
 
@@ -25,40 +28,85 @@
         # --- Package Data Template (Injected by Ansible) ---
         declare -A REQUIRED_VERSIONS
         {% for line in required_packages_raw %}
-        {% set parts = line | regex_replace('^(.*)-([0-9].*)$', '\1,\2') | split(',') %}
-        REQUIRED_VERSIONS["{{ parts[0] }}"]="{{ parts[1] }}"
+        {# We assume the line is PKG_NAME-VERSION. Find the last hyphen before a digit to split. #}
+
+        {# Use regex to find the package name prefix (group 1) and the explicit version (group 2) #}
+        {% set result = line | regex_search('^(.*?)-([0-9].*)$') %}
+        
+        {% if result %}
+        {# result[0] is package name prefix (e.g., 'kernel-4.18.0'), result[1] is version (e.g., '555.69.1.el8_10') #}
+        {% set pkg_name_prefix = result[0] %}
+        {% set req_version = result[1] %}
+
+        {# Special handling: If pkg_name_prefix contains a version number (like kernel-4.18.0), strip it down to the base name ('kernel') #}
+        {% if pkg_name_prefix is search('-[0-9]') %}
+          {% set pkg_name_base = pkg_name_prefix | regex_replace('^([^-]+)-.*$', '\1') %}
+        {% else %}
+          {% set pkg_name_base = pkg_name_prefix %}
+        {% endif %}
+
+        REQUIRED_VERSIONS["{{ pkg_name_base }}"]="{{ req_version }}"
+        {% endif %}
         {% endfor %}
         # ----------------------------------------------------
 
         REPORT_DATA=""
         HOST_NAME="{{ inventory_hostname }}"
         
-        # Function to process an installed line (Name-Epoch:Version-Release.Arch)
+        # Function to process an installed base package and all its versions
         process_package() {
             local pkg_name="$1"
             local required_ver="${REQUIRED_VERSIONS[$pkg_name]}"
 
-            # 1. Check if the package is installed
-            # Check for silent failure (2>/dev/null)
-            if ! INSTALLED_INFO=$(rpm -q "$pkg_name" 2>/dev/null); then
+            # Use rpm -qa to list ALL installed packages matching the base name (supports multiple kernel versions)
+            # --qf '%{VERSION}-%{RELEASE}\n' extracts only the VERSION-RELEASE part
+            INSTALLED_VERSIONS=$(rpm -qa "$pkg_name" --qf '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
+            
+            if [[ -z "$INSTALLED_VERSIONS" ]]; then
                 # Package not installed: Output: HOST|PACKAGE|INSTALLED_VERSION|REQUIRED_VERSION
                 REPORT_DATA+="$HOST_NAME|$pkg_name|NOT_INSTALLED|$required_ver\n"
                 return
             fi
-            
-            # 2. Extract the installed version-release part for comparison
-            # rpm output looks like: pkg-version-release.arch
-            local installed_ver=$(echo "$INSTALLED_INFO" | sed -E "s/^$pkg_name-(.*)\..*$/\1/")
-            
-            # --- Robust Version Comparison using sort -V ---
-            
-            # Get the version that is numerically lowest
-            FIRST_VERSION=$(echo -e "$installed_ver\n$required_ver" | sort -V | head -n 1)
 
-            # Check if the installed version is numerically lower than the required version (and they are not equal)
-            if [[ "$FIRST_VERSION" == "$installed_ver" ]] && [[ "$installed_ver" != "$required_ver" ]]; then
-                # DEFICIENT: Output: HOST|PACKAGE|INSTALLED_VERSION|REQUIRED_VERSION
-                REPORT_DATA+="$HOST_NAME|$pkg_name|$installed_ver|$required_ver\n"
+            # Flag to track if at least one installed version meets the requirement
+            MEETS_REQUIREMENT=0
+            LOWEST_DEFICIENT_INSTALLED_VER=""
+
+            # Iterate through all versions installed for this base package
+            while IFS= read -r installed_ver; do
+                if [[ -z "$installed_ver" ]]; then continue; fi
+
+                # --- Robust Version Comparison using sort -V ---
+                
+                # Get the version that is numerically lowest
+                FIRST_VERSION=$(echo -e "$installed_ver\n$required_ver" | sort -V | head -n 1)
+
+                # Check if the installed version is numerically lower than the required version (and they are not equal)
+                if [[ "$FIRST_VERSION" == "$installed_ver" ]] && [[ "$installed_ver" != "$required_ver" ]]; then
+                    # This specific installed version is DEFICIENT.
+                    
+                    # Track the lowest deficient version found (useful for reporting)
+                    if [[ -z "$LOWEST_DEFICIENT_INSTALLED_VER" ]]; then
+                       LOWEST_DEFICIENT_INSTALLED_VER="$installed_ver"
+                    else
+                        # If we find an even older deficient version, update the tracking variable
+                        # This ensures we report the oldest installed version if all are deficient
+                        LOWEST_CHECK=$(echo -e "$installed_ver\n$LOWEST_DEFICIENT_INSTALLED_VER" | sort -V | head -n 1)
+                        if [[ "$LOWEST_CHECK" == "$installed_ver" ]]; then
+                            LOWEST_DEFICIENT_INSTALLED_VER="$installed_ver"
+                        fi
+                    fi
+                else
+                    # This specific installed version MEETS or EXCEEDS the requirement.
+                    MEETS_REQUIREMENT=1
+                fi
+            done <<< "$INSTALLED_VERSIONS"
+            
+            # Reporting Logic:
+            # We only report a deficiency IF no installed version (MEETS_REQUIREMENT=0) met the minimum.
+            if [[ "$MEETS_REQUIREMENT" -eq 0 ]] && [[ -n "$LOWEST_DEFICIENT_INSTALLED_VER" ]]; then
+                # Report the lowest version found, indicating no valid version exists.
+                REPORT_DATA+="$HOST_NAME|$pkg_name|$LOWEST_DEFICIENT_INSTALLED_VER|$required_ver\n"
             fi
         }
 
