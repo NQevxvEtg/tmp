@@ -1,0 +1,130 @@
+- name: Identify reachable hosts
+  hosts: all
+  become: true  
+  gather_facts: false
+  strategy: linear
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - block:
+        - name: Quick check for SSH connection readiness
+          ansible.builtin.wait_for_connection:
+            timeout: 5 # Fail fast if no SSH connection
+          delegate_to: "{{ inventory_hostname }}" # Ensure this runs against the target host
+
+        - name: Add device to general 'reachable' group
+          ansible.builtin.group_by:
+            key: "reachable"
+            # No need for ansible_hostname here for the general group, it's just 'reachable'
+
+      rescue:
+        - name: Mark unreachable host
+          ansible.builtin.debug:
+            msg: "Host {{ inventory_hostname }} is unreachable within the initial check. Skipping."
+          # No need to create a group for unreachable. The absence from 'reachable' implies unreachability.
+
+- name: Check disk usage
+  ignore_unreachable: yes
+  hosts: reachable
+  become: true
+  vars_files: 
+    - ../../vaults/vbox_vault.yml  
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    ansible_remote_tmp: /var/ansible_tmp
+    required_packages_raw: "{{ lookup('file', playbook_dir + '/../files/package_versions.txt').splitlines() }}"
+    output_file: "{{ playbook_dir }}/../files/combined_disk_report.txt"
+
+  tasks:
+    - name: Get primary group for local file permissions
+      delegate_to: localhost
+      ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
+      register: primary_group
+      changed_when: false
+
+    - name: Execute Bash script fragment on remote host to check versions
+      ansible.builtin.shell: |
+        #!/bin/bash
+        
+        # --- Package Data Template (Injected by Ansible) ---
+        # This associative array holds the mapping of PackageName -> RequiredVersion
+        declare -A REQUIRED_VERSIONS
+        {% for line in required_packages_raw %}
+        {% set parts = line | regex_replace('^(.*)-([0-9].*)$', '\1,\2') | split(',') %}
+        REQUIRED_VERSIONS["{{ parts[0] }}"]="{{ parts[1] }}"
+        {% endfor %}
+        # ----------------------------------------------------
+
+        REPORT_DATA=""
+        EXIT_STATUS=0
+        
+        # Function to process an installed line (Name-Epoch:Version-Release.Arch)
+        process_package() {
+            local pkg_name="$1"
+            local required_ver="${REQUIRED_VERSIONS[$pkg_name]}"
+
+            # 1. Check if the package is installed
+            if ! INSTALLED_INFO=$(rpm -q "$pkg_name" 2>/dev/null); then
+                # Package not installed
+                REPORT_DATA+="{\"host\":\"{{ inventory_hostname }}\", \"package\":\"$pkg_name\", \"installed\":\"NOT_INSTALLED\", \"required\":\"$required_ver\", \"deficient\": true}\n"
+                return
+            fi
+            
+            # 2. Extract the installed version-release part for comparison
+            # rpm output looks like: pkg-version-release.arch
+            local installed_ver=$(echo "$INSTALLED_INFO" | sed -E "s/^$pkg_name-(.*)\..*$/\1/")
+            
+            # --- Robust Version Comparison using sort -V ---
+            # sort -V sorts versions numerically. We check which version comes first.
+            
+            # Get the version that is numerically lowest
+            FIRST_VERSION=$(echo -e "$installed_ver\n$required_ver" | sort -V | head -n 1)
+
+            # If the installed version is numerically lower than the required version, it's deficient.
+            # We must also exclude the case where they are equal.
+            if [[ "$FIRST_VERSION" == "$installed_ver" ]] && [[ "$installed_ver" != "$required_ver" ]]; then
+                # DEFICIENT
+                REPORT_DATA+="{\"host\":\"{{ inventory_hostname }}\", \"package\":\"$pkg_name\", \"installed\":\"$installed_ver\", \"required\":\"$required_ver\", \"deficient\": true}\n"
+            fi
+            # If not deficient, no output is produced for this package.
+        }
+
+        # Main loop to process all required packages
+        for pkg_name in "${!REQUIRED_VERSIONS[@]}"; do
+            process_package "$pkg_name"
+        done
+
+        # Output the collected JSON lines
+        echo "$REPORT_DATA"
+      register: package_check_results
+      changed_when: false
+
+    - name: Generate and write a single combined report
+      delegate_to: localhost
+      run_once: true
+      # This block reconstructs the CSV from the JSON fragments gathered from each host
+      ansible.builtin.copy:
+        content: |
+          # Package Version Deficiencies Report
+          # Generated at: {{ ansible_date_time.iso8601 | regex_replace('\\..*$', '') }}
+          # -------------------------------------------------------------
+          # HOSTNAME,PACKAGE_NAME,INSTALLED_VERSION,REQUIRED_MINIMUM_VERSION
+
+          {% for host in ansible_play_hosts %}
+          {# Read the output lines (one JSON object per deficient package) #}
+          {% set raw_lines = hostvars[host].package_check_results.stdout_lines | default([]) | list %}
+          
+          {% for line in raw_lines %}
+          {# Safely convert the JSON string fragment back into a structured dictionary #}
+          {% set pkg_info = line | from_json %}
+          {{ pkg_info.host | upper }},{{ pkg_info.package}},{{ pkg_info.installed}},{{ pkg_info.required }}
+          {% endfor %}
+          {% endfor %}
+        dest: "{{ output_file }}"
+        owner: "{{ lookup('env', 'USER') }}"
+        group: "{{ primary_group.stdout }}"
+        mode: '0644'
