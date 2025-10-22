@@ -18,111 +18,95 @@
       register: primary_group
       changed_when: false
 
-    - name: Execute Bash script fragment on remote host to check versions
-      # Use `|` (pipe) to preserve newlines and avoid quoting issues with single quotes
+    - name: Execute single-pass, optimized version check
       ansible.builtin.shell: |
         #!/bin/bash
         
-        # --- Package Data Template (Injected by Ansible) ---
-        # Inject the raw list of required packages (e.g., kernel-4.18.0-555.69.1.el8_10)
-        REQUIRED_RAW=(
+        # Inject the raw required packages list as a multi-line string
+        REQUIRED_RAW="
         {% for line in required_packages_raw %}
-          "{{ line }}"
+        {{ line }}
         {% endfor %}
-        )
-        # REQUIRED_VERSIONS map will store: [base_pkg_name]=required_version
-        declare -A REQUIRED_VERSIONS
-        # ----------------------------------------------------
-
+        "
+        
         REPORT_DATA=""
         HOST_NAME="{{ inventory_hostname }}"
-
-        # Function to split raw entry into base package name and minimum required version
-        parse_required_packages() {
-            local raw_entry="$1"
-            
-            # 1. Find the split point (the last hyphen before a digit that starts the version)
-            # Use grep/awk/sed to separate NAME-VERSION. This is more reliable than pure Bash for complex strings.
-            # Example: kernel-4.18.0-555.69.1.el8_10
-            
-            if [[ "$raw_entry" =~ ^(.*?)-([0-9].*)$ ]]; then
-                # BASH_REMATCH[1] is the name prefix (e.g., kernel-4.18.0)
-                # BASH_REMATCH[2] is the required version (e.g., 555.69.1.el8_10)
-                local pkg_name_prefix="${BASH_REMATCH[1]}"
-                local required_ver="${BASH_REMATCH[2]}"
-                
-                # 2. Clean the prefix down to the base package name (e.g., kernel-4.18.0 -> kernel)
-                local pkg_name_base
-                # Check if the prefix still contains a version (i.e. if it contains a hyphen followed by a digit)
-                if [[ "$pkg_name_prefix" =~ -[0-9] ]]; then
-                    # Extract the part before the first hyphen
-                    pkg_name_base="${pkg_name_prefix%%-*}"
-                else
-                    pkg_name_base="$pkg_name_prefix"
-                fi
-
-                # Store result in the global map
-                REQUIRED_VERSIONS["$pkg_name_base"]="$required_ver"
-            fi
-        }
-
-        # First pass: Populate REQUIRED_VERSIONS map
-        for entry in "${REQUIRED_RAW[@]}"; do
-            if [[ -n "$entry" ]]; then
-               parse_required_packages "$entry"
-            fi
-        done
         
-        # Function to process an installed base package and all its versions
-        process_package() {
-            local pkg_name="$1"
-            local required_ver="${REQUIRED_VERSIONS[$pkg_name]}"
+        # Read the raw list line by line
+        echo "$REQUIRED_RAW" | while IFS= read -r raw_entry; do
+            if [[ -z "$raw_entry" ]]; then continue; fi
 
-            # Use rpm -qa to list ALL installed packages matching the base name
-            INSTALLED_VERSIONS=$(rpm -qa "$pkg_name" --qf '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
+            # --- 1. Reliable Split using SED ---
+            # Output format: PKG_PREFIX\nREQUIRED_EVR
+            # PKG_PREFIX is everything up to the final hyphen preceding a digit.
+            # REQUIRED_EVR is everything after that hyphen.
             
-            if [[ -z "$INSTALLED_VERSIONS" ]]; then
-                REPORT_DATA+="$HOST_NAME|$pkg_name|NOT_INSTALLED|$required_ver\n"
-                return
+            # This sed command is designed to split the string into two groups based on the 
+            # LAST occurrence of '-[0-9]...' and print them on separate lines.
+            
+            SPLIT_DATA=$(echo "$raw_entry" | sed -r 's/^(.*)-([0-9].*)$/\1\n\2/')
+            
+            # Check if sed successfully generated two lines
+            if [[ $(echo "$SPLIT_DATA" | wc -l) -ne 2 ]]; then
+                # Unable to parse this line, skip
+                continue
+            fi
+            
+            PKG_NAME_PREFIX=$(echo "$SPLIT_DATA" | head -n 1 | tr -d '\n')
+            REQUIRED_EVR=$(echo "$SPLIT_DATA" | tail -n 1 | tr -d '\n')
+
+            # --- 2. Determine Base Package Name ---
+            # Remove version specifiers from prefixes like 'kernel-4.18.0'
+            if [[ "$PKG_NAME_PREFIX" =~ -[0-9] ]]; then
+                # Strip everything after the FIRST hyphen (e.g., 'kernel-4.18.0' -> 'kernel')
+                PKG_NAME_BASE="${PKG_NAME_PREFIX%%-*}"
+            else
+                # Default: use the prefix (e.g., 'openssl' or 'libssh2-devel')
+                PKG_NAME_BASE="$PKG_NAME_PREFIX"
+            fi
+            
+            # --- 3. Query Installed Versions of the Base Package ---
+            INSTALLED_EVRS=$(rpm -qa "$PKG_NAME_BASE" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
+            
+            if [[ -z "$INSTALLED_EVRS" ]]; then
+                REPORT_DATA+="$HOST_NAME|$PKG_NAME_BASE|NOT_INSTALLED|$REQUIRED_EVR\n"
+                continue
             fi
 
             MEETS_REQUIREMENT=0
-            LOWEST_DEFICIENT_INSTALLED_VER=""
+            OLDEST_DEFICIENT_EVR=""
 
-            # Iterate through all installed versions
-            while IFS= read -r installed_ver; do
-                if [[ -z "$installed_ver" ]]; then continue; fi
+            while IFS= read -r installed_evr; do
+                if [[ -z "$installed_evr" ]]; then continue; fi
+                
+                # Check if the installed version is numerically lower than the required version
+                # Comparison string: installed_evr\nrequired_evr
+                FIRST_VERSION=$(echo -e "$installed_evr\n$REQUIRED_EVR" | sort -V | head -n 1)
 
-                # Version Comparison (requires sort -V)
-                FIRST_VERSION=$(echo -e "$installed_ver\n$required_ver" | sort -V | head -n 1)
-
-                if [[ "$FIRST_VERSION" == "$installed_ver" ]] && [[ "$installed_ver" != "$required_ver" ]]; then
-                    # This installed version is deficient. Track the lowest one.
-                    if [[ -z "$LOWEST_DEFICIENT_INSTALLED_VER" ]]; then
-                       LOWEST_DEFICIENT_INSTALLED_VER="$installed_ver"
+                if [[ "$FIRST_VERSION" == "$installed_evr" ]] && [[ "$installed_evr" != "$REQUIRED_EVR" ]]; then
+                    # Deficient: track the absolute oldest installed version
+                    if [[ -z "$OLDEST_DEFICIENT_EVR" ]]; then
+                       OLDEST_DEFICIENT_EVR="$installed_evr"
                     else
-                        LOWEST_CHECK=$(echo -e "$installed_ver\n$LOWEST_DEFICIENT_INSTALLED_VER" | sort -V | head -n 1)
-                        if [[ "$LOWEST_CHECK" == "$installed_ver" ]]; then
-                            LOWEST_DEFICIENT_INSTALLED_VER="$installed_ver"
+                        # Compare deficient versions
+                        LOWEST_CHECK=$(echo -e "$installed_evr\n$OLDEST_DEFICIENT_EVR" | sort -V | head -n 1)
+                        if [[ "$LOWEST_CHECK" == "$installed_evr" ]]; then
+                            OLDEST_DEFICIENT_EVR="$installed_evr"
                         fi
                     fi
                 else
-                    # Found at least one package that meets the requirement
+                    # Compliant: found a version that meets or exceeds the requirement
                     MEETS_REQUIREMENT=1
+                    break # Stop processing versions for this base package
                 fi
-            done <<< "$INSTALLED_VERSIONS"
+            done <<< "$INSTALLED_EVRS"
             
-            # Report failure only if no installed version met the required minimum
-            if [[ "$MEETS_REQUIREMENT" -eq 0 ]] && [[ -n "$LOWEST_DEFICIENT_INSTALLED_VER" ]]; then
-                REPORT_DATA+="$HOST_NAME|$pkg_name|$LOWEST_DEFICIENT_INSTALLED_VER|$required_ver\n"
+            # Final Reporting
+            if [[ "$MEETS_REQUIREMENT" -eq 0 ]] && [[ -n "$OLDEST_DEFICIENT_EVR" ]]; then
+                REPORT_DATA+="$HOST_NAME|$PKG_NAME_BASE|$OLDEST_DEFICIENT_EVR|$REQUIRED_EVR\n"
             fi
-        }
-
-        # Second pass: Process packages using the populated map
-        for pkg_name in "${!REQUIRED_VERSIONS[@]}"; do
-            process_package "$pkg_name"
         done
-
+        
         echo -e "$REPORT_DATA"
       register: package_check_results
       changed_when: false
