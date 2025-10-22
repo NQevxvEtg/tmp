@@ -7,7 +7,8 @@
   vars:
     ansible_become_password: "{{ remote_host_become_pass }}"
     ansible_remote_tmp: /var/ansible_tmp
-    required_packages_raw: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() }}"
+    # Pass the raw lines directly to the shell script
+    required_packages_raw: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() | map('trim') | reject('equalto', '') | list }}"
     output_file: "{{ playbook_dir }}/../../files/rhel_vulnerability_report.txt"
 
   tasks:
@@ -18,39 +19,59 @@
       changed_when: false
 
     - name: Execute Bash script fragment on remote host to check versions
+      # Use `|` (pipe) to preserve newlines and avoid quoting issues with single quotes
       ansible.builtin.shell: |
         #!/bin/bash
         
         # --- Package Data Template (Injected by Ansible) ---
-        declare -A REQUIRED_VERSIONS
+        # Inject the raw list of required packages (e.g., kernel-4.18.0-555.69.1.el8_10)
+        REQUIRED_RAW=(
         {% for line in required_packages_raw %}
-        {# Filter out empty lines or comments #}
-        {% if line | length > 0 and not line.startswith('#') %}
-        
-        {# 1. Split line into PKG_PREFIX and REQUIRED_VERSION using regex_replace #}
-        {# Example input: kernel-4.18.0-555.69.1.el8_10 -> Output: kernel-4.18.0,555.69.1.el8_10 #}
-        {% set split_line = line | regex_replace('^(.*)-([0-9].*)$', '\1,\2') | split(',') %}
-
-        {% if split_line | length == 2 %}
-          {% set pkg_name_prefix = split_line[0] %}
-          {% set req_version = split_line[1] %}
-          
-          {# 2. Clean the prefix down to the base package name (e.g., kernel-4.18.0 -> kernel) #}
-          {% if pkg_name_prefix is search('-[0-9]') %}
-            {# Split by hyphen and take the first element #}
-            {% set pkg_name_base = pkg_name_prefix.split('-') | first %}
-          {% else %}
-            {% set pkg_name_base = pkg_name_prefix %}
-          {% endif %}
-          
-          REQUIRED_VERSIONS["{{ pkg_name_base | trim }}"]="{{ req_version | trim }}"
-        {% endif %}
-        {% endif %}
+          "{{ line }}"
         {% endfor %}
+        )
+        # REQUIRED_VERSIONS map will store: [base_pkg_name]=required_version
+        declare -A REQUIRED_VERSIONS
         # ----------------------------------------------------
 
         REPORT_DATA=""
         HOST_NAME="{{ inventory_hostname }}"
+
+        # Function to split raw entry into base package name and minimum required version
+        parse_required_packages() {
+            local raw_entry="$1"
+            
+            # 1. Find the split point (the last hyphen before a digit that starts the version)
+            # Use grep/awk/sed to separate NAME-VERSION. This is more reliable than pure Bash for complex strings.
+            # Example: kernel-4.18.0-555.69.1.el8_10
+            
+            if [[ "$raw_entry" =~ ^(.*?)-([0-9].*)$ ]]; then
+                # BASH_REMATCH[1] is the name prefix (e.g., kernel-4.18.0)
+                # BASH_REMATCH[2] is the required version (e.g., 555.69.1.el8_10)
+                local pkg_name_prefix="${BASH_REMATCH[1]}"
+                local required_ver="${BASH_REMATCH[2]}"
+                
+                # 2. Clean the prefix down to the base package name (e.g., kernel-4.18.0 -> kernel)
+                local pkg_name_base
+                # Check if the prefix still contains a version (i.e. if it contains a hyphen followed by a digit)
+                if [[ "$pkg_name_prefix" =~ -[0-9] ]]; then
+                    # Extract the part before the first hyphen
+                    pkg_name_base="${pkg_name_prefix%%-*}"
+                else
+                    pkg_name_base="$pkg_name_prefix"
+                fi
+
+                # Store result in the global map
+                REQUIRED_VERSIONS["$pkg_name_base"]="$required_ver"
+            fi
+        }
+
+        # First pass: Populate REQUIRED_VERSIONS map
+        for entry in "${REQUIRED_RAW[@]}"; do
+            if [[ -n "$entry" ]]; then
+               parse_required_packages "$entry"
+            fi
+        done
         
         # Function to process an installed base package and all its versions
         process_package() {
@@ -61,7 +82,6 @@
             INSTALLED_VERSIONS=$(rpm -qa "$pkg_name" --qf '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
             
             if [[ -z "$INSTALLED_VERSIONS" ]]; then
-                # Package not installed: Output: HOST|PACKAGE|INSTALLED_VERSION|REQUIRED_VERSION
                 REPORT_DATA+="$HOST_NAME|$pkg_name|NOT_INSTALLED|$required_ver\n"
                 return
             fi
@@ -73,24 +93,21 @@
             while IFS= read -r installed_ver; do
                 if [[ -z "$installed_ver" ]]; then continue; fi
 
-                # --- Robust Version Comparison using sort -V ---
-                
+                # Version Comparison (requires sort -V)
                 FIRST_VERSION=$(echo -e "$installed_ver\n$required_ver" | sort -V | head -n 1)
 
                 if [[ "$FIRST_VERSION" == "$installed_ver" ]] && [[ "$installed_ver" != "$required_ver" ]]; then
-                    # This specific installed version is DEFICIENT.
-                    
+                    # This installed version is deficient. Track the lowest one.
                     if [[ -z "$LOWEST_DEFICIENT_INSTALLED_VER" ]]; then
                        LOWEST_DEFICIENT_INSTALLED_VER="$installed_ver"
                     else
-                        # Track the absolute lowest (oldest) version if all are deficient
                         LOWEST_CHECK=$(echo -e "$installed_ver\n$LOWEST_DEFICIENT_INSTALLED_VER" | sort -V | head -n 1)
                         if [[ "$LOWEST_CHECK" == "$installed_ver" ]]; then
                             LOWEST_DEFICIENT_INSTALLED_VER="$installed_ver"
                         fi
                     fi
                 else
-                    # This specific installed version MEETS or EXCEEDS the requirement.
+                    # Found at least one package that meets the requirement
                     MEETS_REQUIREMENT=1
                 fi
             done <<< "$INSTALLED_VERSIONS"
@@ -101,7 +118,7 @@
             fi
         }
 
-        # Main loop to process all required packages
+        # Second pass: Process packages using the populated map
         for pkg_name in "${!REQUIRED_VERSIONS[@]}"; do
             process_package "$pkg_name"
         done
