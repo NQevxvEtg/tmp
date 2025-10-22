@@ -7,8 +7,8 @@
   vars:
     ansible_become_password: "{{ remote_host_become_pass }}"
     ansible_remote_tmp: /var/ansible_tmp
-    required_packages_raw: "{{ lookup('file', playbook_dir + '/../files/package_versions.txt').splitlines() }}"
-    output_file: "rhel_vulnerability_report_{{ ansible_date_time.iso8601 }}.csv"
+    required_packages_raw: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() }}"
+    output_file: "{{ playbook_dir }}/../../files/rhel_vulnerability_report.txt"
 
   tasks:
     - name: Get primary group for local file permissions
@@ -83,7 +83,9 @@
           # HOSTNAME,PACKAGE_NAME,INSTALLED_VERSION,REQUIRED_MINIMUM_VERSION
 
           {% for host in ansible_play_hosts %}
-          {% set raw_lines = hostvars[host].package_check_results.stdout_lines | default([]) | select('trim') | list %}
+          {# Use stdout and split by newline for robustness #}
+          {% set raw_stdout = hostvars[host].package_check_results.stdout | default('') %}
+          {% set raw_lines = raw_stdout.split('\n') | map('trim') | reject('equalto', '') | list %}
           
           {% for line in raw_lines %}
           {# Split the pipe-delimited string: HOST|PACKAGE|... #}
