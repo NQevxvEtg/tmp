@@ -17,12 +17,12 @@
       ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
       register: primary_group
       changed_when: false
+
     - name: Execute single-pass, optimized version check
       ansible.builtin.shell: |
         #!/bin/bash
         
         # --- Package Data Template (Injected by Ansible) ---
-        # Inject the raw required packages list as a structured array
         REQUIRED_RAW=(
         {% for line in required_packages_raw %}
           "{{ line }}"
@@ -40,7 +40,7 @@
             # --- 1. Reliable Split using SED ---
             # PKG_PREFIX\nREQUIRED_EVR
             
-            # Using parameter expansion to capture sed output is cleaner than pipes
+            # Use sed to generate two lines
             SPLIT_DATA=$(echo "$RAW_ENTRY" | sed -r 's/^(.*)-([0-9].*)$/\1\n\2/')
             
             # Check if sed successfully generated two lines
@@ -49,11 +49,14 @@
                 continue
             fi
             
-            # Use printf for reliable extraction without newline issues
-            readarray -t SPLIT_ARRAY < <(printf "%s" "$SPLIT_DATA")
+            # FIX: Use simple pipe and read to capture the two separated lines, 
+            # ensuring compatibility with older Bash versions.
             
-            PKG_NAME_PREFIX="${SPLIT_ARRAY[0]}"
-            REQUIRED_EVR="${SPLIT_ARRAY[1]}"
+            # Using a heredoc or pipe to feed the two lines into sequential read commands
+            read -r PKG_NAME_PREFIX REQUIRED_EVR < <(echo "$SPLIT_DATA" | tr '\n' ' ')
+            
+            # If the parsing failed and REQUIRED_EVR is empty, skip.
+            if [[ -z "$REQUIRED_EVR" ]]; then continue; fi
 
             # --- 2. Determine Base Package Name ---
             # Heuristic for Kernel/versioned packages: 'kernel-4.18.0' -> 'kernel'
@@ -64,7 +67,6 @@
             
             # --- 3. Query Installed Versions ---
             
-            # Use rpm -q to check if the base package exists AND get installed versions
             INSTALLED_EVRS=$(rpm -qa "$PKG_NAME_BASE" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
             
             # Requirement #2: If not installed, skip the report entirely.
@@ -79,10 +81,9 @@
 
             # Read installed versions line by line
             while IFS= read -r installed_evr; do
-                if [[ -z "$installed_evr" ]]; then continue; fi
+                if [[ -z "$installed_evr" ]]; then continue; fi 
                 
                 # Comparison string: installed_evr\nrequired_evr
-                # If installed_evr is the first version alphabetically/numerically, it is deficient or equal.
                 FIRST_VERSION=$(echo -e "$installed_evr\n$REQUIRED_EVR" | sort -V | head -n 1)
 
                 if [[ "$FIRST_VERSION" == "$installed_evr" ]] && [[ "$installed_evr" != "$REQUIRED_EVR" ]]; then
@@ -99,16 +100,15 @@
                         fi
                     fi
                 else
-                    # Installed version meets or exceeds requirement (This handles Requirement #3 implicitly)
+                    # Installed version meets or exceeds requirement
                     MEETS_REQUIREMENT=1
-                    break # Optimization: job done for this package
+                    break 
                 fi
             done <<< "$INSTALLED_EVRS"
             
             # --- 5. Final Reporting (Only report deficiencies) ---
             
             if [[ "$MEETS_REQUIREMENT" -eq 0 ]] && [[ -n "$OLDEST_DEFICIENT_EVR" ]]; then
-                # Report when all installed versions are deficient.
                 REPORT_DATA+="$HOST_NAME|$PKG_NAME_BASE|$OLDEST_DEFICIENT_EVR|$REQUIRED_EVR\n"
             fi
             
