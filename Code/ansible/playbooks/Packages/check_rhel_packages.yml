@@ -17,34 +17,31 @@
       ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
       register: primary_group
       changed_when: false
-
     - name: Execute single-pass, optimized version check
       ansible.builtin.shell: |
         #!/bin/bash
         
-        # Inject the raw required packages list as a multi-line string
-        REQUIRED_RAW="
+        # --- Package Data Template (Injected by Ansible) ---
+        # Inject the raw required packages list as a structured array
+        REQUIRED_RAW=(
         {% for line in required_packages_raw %}
-        {{ line }}
+          "{{ line }}"
         {% endfor %}
-        "
+        )
+        # ----------------------------------------------------
         
         REPORT_DATA=""
         HOST_NAME="{{ inventory_hostname }}"
         
-        # Read the raw list line by line
-        echo "$REQUIRED_RAW" | while IFS= read -r raw_entry; do
-            if [[ -z "$raw_entry" ]]; then continue; fi
+        # Iterate over the injected array
+        for RAW_ENTRY in "${REQUIRED_RAW[@]}"; do
+            if [[ -z "$RAW_ENTRY" ]]; then continue; fi
 
             # --- 1. Reliable Split using SED ---
-            # Output format: PKG_PREFIX\nREQUIRED_EVR
-            # PKG_PREFIX is everything up to the final hyphen preceding a digit.
-            # REQUIRED_EVR is everything after that hyphen.
+            # PKG_PREFIX\nREQUIRED_EVR
             
-            # This sed command is designed to split the string into two groups based on the 
-            # LAST occurrence of '-[0-9]...' and print them on separate lines.
-            
-            SPLIT_DATA=$(echo "$raw_entry" | sed -r 's/^(.*)-([0-9].*)$/\1\n\2/')
+            # Using parameter expansion to capture sed output is cleaner than pipes
+            SPLIT_DATA=$(echo "$RAW_ENTRY" | sed -r 's/^(.*)-([0-9].*)$/\1\n\2/')
             
             # Check if sed successfully generated two lines
             if [[ $(echo "$SPLIT_DATA" | wc -l) -ne 2 ]]; then
@@ -52,60 +49,70 @@
                 continue
             fi
             
-            PKG_NAME_PREFIX=$(echo "$SPLIT_DATA" | head -n 1 | tr -d '\n')
-            REQUIRED_EVR=$(echo "$SPLIT_DATA" | tail -n 1 | tr -d '\n')
+            # Use printf for reliable extraction without newline issues
+            readarray -t SPLIT_ARRAY < <(printf "%s" "$SPLIT_DATA")
+            
+            PKG_NAME_PREFIX="${SPLIT_ARRAY[0]}"
+            REQUIRED_EVR="${SPLIT_ARRAY[1]}"
 
             # --- 2. Determine Base Package Name ---
-            # Remove version specifiers from prefixes like 'kernel-4.18.0'
+            # Heuristic for Kernel/versioned packages: 'kernel-4.18.0' -> 'kernel'
+            PKG_NAME_BASE="$PKG_NAME_PREFIX"
             if [[ "$PKG_NAME_PREFIX" =~ -[0-9] ]]; then
-                # Strip everything after the FIRST hyphen (e.g., 'kernel-4.18.0' -> 'kernel')
                 PKG_NAME_BASE="${PKG_NAME_PREFIX%%-*}"
-            else
-                # Default: use the prefix (e.g., 'openssl' or 'libssh2-devel')
-                PKG_NAME_BASE="$PKG_NAME_PREFIX"
             fi
             
-            # --- 3. Query Installed Versions of the Base Package ---
+            # --- 3. Query Installed Versions ---
+            
+            # Use rpm -q to check if the base package exists AND get installed versions
             INSTALLED_EVRS=$(rpm -qa "$PKG_NAME_BASE" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
             
+            # Requirement #2: If not installed, skip the report entirely.
             if [[ -z "$INSTALLED_EVRS" ]]; then
-                REPORT_DATA+="$HOST_NAME|$PKG_NAME_BASE|NOT_INSTALLED|$REQUIRED_EVR\n"
                 continue
             fi
 
+            # --- 4. Comparison Logic ---
+            
             MEETS_REQUIREMENT=0
             OLDEST_DEFICIENT_EVR=""
 
+            # Read installed versions line by line
             while IFS= read -r installed_evr; do
                 if [[ -z "$installed_evr" ]]; then continue; fi
                 
-                # Check if the installed version is numerically lower than the required version
                 # Comparison string: installed_evr\nrequired_evr
+                # If installed_evr is the first version alphabetically/numerically, it is deficient or equal.
                 FIRST_VERSION=$(echo -e "$installed_evr\n$REQUIRED_EVR" | sort -V | head -n 1)
 
                 if [[ "$FIRST_VERSION" == "$installed_evr" ]] && [[ "$installed_evr" != "$REQUIRED_EVR" ]]; then
-                    # Deficient: track the absolute oldest installed version
+                    # Installed version is deficient. Track the oldest deficient one.
+                    
                     if [[ -z "$OLDEST_DEFICIENT_EVR" ]]; then
                        OLDEST_DEFICIENT_EVR="$installed_evr"
                     else
-                        # Compare deficient versions
+                        # Compare stored oldest vs current installed
                         LOWEST_CHECK=$(echo -e "$installed_evr\n$OLDEST_DEFICIENT_EVR" | sort -V | head -n 1)
                         if [[ "$LOWEST_CHECK" == "$installed_evr" ]]; then
+                            # New installed version is even older than the previously tracked one
                             OLDEST_DEFICIENT_EVR="$installed_evr"
                         fi
                     fi
                 else
-                    # Compliant: found a version that meets or exceeds the requirement
+                    # Installed version meets or exceeds requirement (This handles Requirement #3 implicitly)
                     MEETS_REQUIREMENT=1
-                    break # Stop processing versions for this base package
+                    break # Optimization: job done for this package
                 fi
             done <<< "$INSTALLED_EVRS"
             
-            # Final Reporting
+            # --- 5. Final Reporting (Only report deficiencies) ---
+            
             if [[ "$MEETS_REQUIREMENT" -eq 0 ]] && [[ -n "$OLDEST_DEFICIENT_EVR" ]]; then
+                # Report when all installed versions are deficient.
                 REPORT_DATA+="$HOST_NAME|$PKG_NAME_BASE|$OLDEST_DEFICIENT_EVR|$REQUIRED_EVR\n"
             fi
-        done
+            
+        done # End of RAW_ENTRY loop
         
         echo -e "$REPORT_DATA"
       register: package_check_results
