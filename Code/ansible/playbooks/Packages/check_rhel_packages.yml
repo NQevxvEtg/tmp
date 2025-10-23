@@ -4,12 +4,14 @@
   become: true
   
   vars_files:
+    # Ensure this path is correct relative to your playbook location
     - ../../vaults/vbox_vault.yml 
+    
   vars:
     ansible_become_password: "{{ remote_host_become_pass }}"
     ansible_remote_tmp: /var/ansible_tmp
     
-    # Pass the entire file content formatted as a newline-separated string (each line: name:version)
+    # Pass the entire file content formatted as a newline-separated string (each line: name-version-release)
     required_packages_raw_data: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() | map('trim') | reject('equalto', '') | join('\n') }}"
     output_file: "{{ playbook_dir }}/../../files/rhel_vulnerability_report.txt"
 
@@ -35,6 +37,13 @@
       ansible.builtin.shell: |
         #!/bin/bash
         
+        # Guard against older bash versions (RHEL 7 might need this)
+        # Check if the shell supports BASH_REMATCH (usually yes on RHEL 8+)
+        if ! command -v bash >/dev/null 2>&1 || [[ "${BASH_VERSION%%[^0-9]*}" -lt 3 ]]; then
+            echo "Error: Bash version too old or not installed." >&2
+            exit 1
+        fi
+
         # Injected newline-separated string of requirements (each line: name-version-release)
         REQUIRED_RAW_DATA="{{ required_packages_raw_data }}"
         
@@ -49,10 +58,11 @@
             
             # Use rpmdev-vercmp to properly compare versions
             if command -v rpmdev-vercmp >/dev/null 2>&1; then
+                # Success (0=equal), Failure (11=ver1>ver2, 12=ver1<ver2)
                 rpmdev-vercmp "$ver1" "$ver2" >/dev/null 2>&1
                 return $?
             else
-                # Fallback method using sort -V
+                # Fallback method using sort -V (less reliable for true RPM versioning)
                 local lowest=$(echo -e "$ver1\n$ver2" | sort -V | head -n 1)
                 if [[ "$lowest" == "$ver1" ]] && [[ "$ver1" != "$ver2" ]]; then
                     return 12  # ver1 < ver2
@@ -68,28 +78,36 @@
         while IFS= read -r RAW_ENTRY; do
             if [[ -z "$RAW_ENTRY" ]]; then continue; fi
     
-            # Parse package name from format: name-version-release
-            # Extract everything before the first hyphen followed by a digit
-            PKG_NAME_LOOKUP=$(echo "$RAW_ENTRY" | sed -E 's/-[0-9].*//')
+            PKG_NAME_LOOKUP=""
+            REQUIRED_VR=""
             
-            # Extract version-release (everything after the package name and first hyphen)
-            REQUIRED_VR="${RAW_ENTRY#${PKG_NAME_LOOKUP}-}"
+            # Use BASH regex matching to robustly split NAME from VERSION-RELEASE.
+            # Look for the last hyphen NOT followed by a digit as part of the name, 
+            # and the first hyphen followed by a digit as the split point.
+            if [[ "$RAW_ENTRY" =~ ^(.*)-([0-9].*)$ ]]; then
+                PKG_NAME_LOOKUP="${BASH_REMATCH[1]}" # Package Name (e.g., openssh-clients)
+                REQUIRED_VR="${BASH_REMATCH[2]}"    # Version-Release (e.g., 8.0p1-26.el8_10)
+            else
+                echo "Warning: Entry failed regex parsing: $RAW_ENTRY" >&2
+                continue
+            fi
             
             # Sanity check
             if [[ -z "$PKG_NAME_LOOKUP" ]] || [[ -z "$REQUIRED_VR" ]]; then
-                echo "Invalid entry: $RAW_ENTRY" >&2
+                echo "Critical Error: Failed to assign values for entry: $RAW_ENTRY" >&2
                 continue
             fi
             
-            # Query installed packages with Version-Release only (no epoch needed for comparison)
+            # Query installed packages with Version-Release only 
+            # Note: We must quote $PKG_NAME_LOOKUP because it might contain hyphens
             INSTALLED_VRS=$(rpm -qa "$PKG_NAME_LOOKUP" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
             
             if [[ -z "$INSTALLED_VRS" ]]; then
-                # Package not installed - skip silently (as requested)
+                # Package not installed - skip silently 
                 continue
             fi
     
-            # Check each installed version
+            # Check each installed version (there might be multiple architectures/versions installed)
             while IFS= read -r installed_vr; do
                 if [[ -z "$installed_vr" ]]; then continue; fi
                 
@@ -101,7 +119,7 @@
                 if [[ $RESULT -eq 12 ]]; then
                     # Package is deficient
                     REPORT_DATA+="$HOST_NAME|$PKG_NAME_LOOKUP|$installed_vr|$REQUIRED_VR\n"
-                    break  # Only report once per package name
+                    break  # Only report the deficiency once per package name
                 fi
             done <<< "$INSTALLED_VRS"
             
