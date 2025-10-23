@@ -10,7 +10,7 @@
     ansible_become_password: "{{ remote_host_become_pass }}"
     ansible_remote_tmp: /var/ansible_tmp
     
-    # Pass the entire file content formatted as a newline-separated string
+    # Pass the entire file content formatted as a newline-separated string (each line: name:version)
     # We use join('\n') to ensure it is a single, clean string variable
     required_packages_raw_data: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() | map('trim') | reject('equalto', '') | join('\n') }}"
     output_file: "{{ playbook_dir }}/../../files/rhel_vulnerability_report.txt"
@@ -19,7 +19,7 @@
     - name: Get primary group for local file permissions
       delegate_to: localhost
       ansible.builtin.shell: 
-        cmd: id -gn {{ lookup('env', 'USER') }}
+        cmd: id -gn "{{ lookup('env', 'USER') }}"
       register: primary_group
       changed_when: false
 
@@ -27,7 +27,7 @@
       ansible.builtin.shell: |
         #!/bin/bash
         
-        # Injected newline-separated string of requirements
+        # Injected newline-separated string of requirements (each line: name:version)
         REQUIRED_RAW_DATA="{{ required_packages_raw_data }}"
         
         REPORT_DATA=""
@@ -37,12 +37,12 @@
         while IFS= read -r RAW_ENTRY; do
             if [[ -z "$RAW_ENTRY" ]]; then continue; fi
 
-            # --- 1. Robust Split using Bash Regex ---
-            # Find the package name prefix and the minimum required EVR
-            # e.g., 'bash-4.4.18-15.el8' -> PKG_NAME_PREFIX='bash', REQUIRED_EVR='4.4.18-15.el8'
+            # --- 1. Robust Split using Bash Regex (name:version format) ---
+            # Find the package name and the minimum required EVR
+            # e.g., 'bash:4.4.18-15.el8' -> PKG_NAME_LOOKUP='bash', REQUIRED_EVR='4.4.18-15.el8'
             
-            # Regex to capture everything preceding the last hyphen, and the EVR starting with a digit.
-            regex='(.*)-([0-9].*)'
+            # Regex to capture name before : and version after :
+            regex='^([^:]+):(.*)$'
             
             if [[ "$RAW_ENTRY" =~ $regex ]]; then
                 PKG_NAME_LOOKUP="${BASH_REMATCH[1]}" # e.g., 'bash-completion'
@@ -72,7 +72,7 @@
 
             # Read installed versions line by line
             while IFS= read -r installed_vr; do
-                if [[ -z "$installed_vr" ]]; then continue; }
+                if [[ -z "$installed_vr" ]]; then continue; fi
                 
                 # Comparison: Check if the installed version is STRICTLY older than the required version.
                 # If installed_vr < REQUIRED_EVR, it means installed version is deficient.
