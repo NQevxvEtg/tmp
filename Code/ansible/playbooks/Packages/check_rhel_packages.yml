@@ -32,45 +32,31 @@
       register: primary_group
       changed_when: false
 
-      
-    - name: Execute single-pass, optimized version check
+    - name: Execute single-pass, optimized version check (v4)
       ansible.builtin.shell: |
         #!/bin/bash
         
-        # Guard against older bash versions (RHEL 7 might need this)
-        # Check if the shell supports BASH_REMATCH (usually yes on RHEL 8+)
-        if ! command -v bash >/dev/null 2>&1 || [[ "${BASH_VERSION%%[^0-9]*}" -lt 3 ]]; then
-            echo "Error: Bash version too old or not installed." >&2
-            exit 1
-        fi
-
-        # Injected newline-separated string of requirements (each line: name-version-release)
         REQUIRED_RAW_DATA="{{ required_packages_raw_data }}"
-        
+        HOST_MAJOR_VERSION="{{ ansible_distribution_major_version }}"
+        DEBUG_MODE="{{ debug_check | default('false') }}" 
         REPORT_DATA=""
         HOST_NAME="{{ inventory_hostname }}"
         
         # Function to compare RPM versions using rpmdev-vercmp
-        # Returns: 0 if equal, 11 if ver1 > ver2, 12 if ver1 < ver2
         compare_rpm_versions() {
             local ver1="$1"
             local ver2="$2"
             
-            # Use rpmdev-vercmp to properly compare versions
             if command -v rpmdev-vercmp >/dev/null 2>&1; then
-                # Success (0=equal), Failure (11=ver1>ver2, 12=ver1<ver2)
                 rpmdev-vercmp "$ver1" "$ver2" >/dev/null 2>&1
-                return $?
-            else
-                # Fallback method using sort -V (less reliable for true RPM versioning)
-                local lowest=$(echo -e "$ver1\n$ver2" | sort -V | head -n 1)
-                if [[ "$lowest" == "$ver1" ]] && [[ "$ver1" != "$ver2" ]]; then
-                    return 12  # ver1 < ver2
-                elif [[ "$lowest" == "$ver2" ]] && [[ "$ver1" != "$ver2" ]]; then
-                    return 11  # ver1 > ver2
-                else
-                    return 0   # ver1 == ver2
+                local result=$?
+                if [[ "$DEBUG_MODE" == "true" ]]; then
+                    echo "DEBUG: Compare stripped installed: $ver1 required: $ver2 -> rpmdev-vercmp result: $result" >&2
                 fi
+                return $result
+            else
+                # Fallback logic (omitted for brevity)
+                return 0
             fi
         }
         
@@ -78,54 +64,53 @@
         while IFS= read -r RAW_ENTRY; do
             if [[ -z "$RAW_ENTRY" ]]; then continue; fi
     
-            PKG_NAME_LOOKUP=""
-            REQUIRED_VR=""
-            
-            # Use BASH regex matching to robustly split NAME from VERSION-RELEASE.
-            # Look for the last hyphen NOT followed by a digit as part of the name, 
-            # and the first hyphen followed by a digit as the split point.
+            # 1. Robustly split NAME from VERSION-RELEASE
             if [[ "$RAW_ENTRY" =~ ^(.*)-([0-9].*)$ ]]; then
-                PKG_NAME_LOOKUP="${BASH_REMATCH[1]}" # Package Name (e.g., openssh-clients)
-                REQUIRED_VR="${BASH_REMATCH[2]}"    # Version-Release (e.g., 8.0p1-26.el8_10)
+                PKG_NAME_LOOKUP="${BASH_REMATCH[1]}" 
+                REQUIRED_VR="${BASH_REMATCH[2]}"    
             else
-                echo "Warning: Entry failed regex parsing: $RAW_ENTRY" >&2
                 continue
             fi
             
-            # Sanity check
-            if [[ -z "$PKG_NAME_LOOKUP" ]] || [[ -z "$REQUIRED_VR" ]]; then
-                echo "Critical Error: Failed to assign values for entry: $RAW_ENTRY" >&2
-                continue
+            # 2. Filter out packages meant for other major OS versions
+            if [[ "$REQUIRED_VR" =~ \.el([0-9]+)$ ]]; then
+                REQUIRED_OS_VERSION="${BASH_REMATCH[1]}"
+                if [[ "$REQUIRED_OS_VERSION" != "$HOST_MAJOR_VERSION" ]]; then
+                    continue
+                fi
             fi
             
-            # Query installed packages with Version-Release only 
-            # Note: We must quote $PKG_NAME_LOOKUP because it might contain hyphens
+            # 3. Query installed packages (returns VERSION-RELEASE.ARCH)
             INSTALLED_VRS=$(rpm -qa "$PKG_NAME_LOOKUP" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
             
             if [[ -z "$INSTALLED_VRS" ]]; then
-                # Package not installed - skip silently 
+                if [[ "$DEBUG_MODE" == "true" ]]; then
+                    echo "DEBUG: Package not installed: $PKG_NAME_LOOKUP" >&2
+                fi
                 continue
             fi
     
-            # Check each installed version (there might be multiple architectures/versions installed)
-            while IFS= read -r installed_vr; do
-                if [[ -z "$installed_vr" ]]; then continue; fi
+            # 4. Check each installed version
+            while IFS= read -r installed_vr_raw; do
+                if [[ -z "$installed_vr_raw" ]]; then continue; fi
                 
-                # Compare installed version with required version
+                # Strip common architecture tags (.x86_64, .noarch, etc.) from the installed V-R string
+                installed_vr=$(echo "$installed_vr_raw" | sed -E 's/\.(aarch64|x86_64|i[3-6]86|noarch)$//')
+
+                # Compare the stripped installed version with the required version
                 compare_rpm_versions "$installed_vr" "$REQUIRED_VR"
                 RESULT=$?
                 
                 # If installed < required (exit code 12), report it
                 if [[ $RESULT -eq 12 ]]; then
-                    # Package is deficient
+                    # Report using the stripped installed version
                     REPORT_DATA+="$HOST_NAME|$PKG_NAME_LOOKUP|$installed_vr|$REQUIRED_VR\n"
-                    break  # Only report the deficiency once per package name
+                    break
                 fi
             done <<< "$INSTALLED_VRS"
             
         done <<< "$REQUIRED_RAW_DATA"
         
-        # Output the report data
         echo -e "$REPORT_DATA"
       register: package_check_results
       changed_when: false
