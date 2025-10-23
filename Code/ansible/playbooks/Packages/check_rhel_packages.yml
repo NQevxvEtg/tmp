@@ -35,7 +35,7 @@
       ansible.builtin.shell: |
         #!/bin/bash
         
-        # Injected newline-separated string of requirements (each line: name:version)
+        # Injected newline-separated string of requirements (each line: name-version-release)
         REQUIRED_RAW_DATA="{{ required_packages_raw_data }}"
         
         REPORT_DATA=""
@@ -48,20 +48,18 @@
             local ver2="$2"
             
             # Use rpmdev-vercmp to properly compare versions
-            # If rpmdev-vercmp is not available, fall back to sort -V
             if command -v rpmdev-vercmp >/dev/null 2>&1; then
-                rpmdev-vercmp "$ver1" "$ver2"
-                echo $?
+                rpmdev-vercmp "$ver1" "$ver2" >/dev/null 2>&1
+                return $?
             else
                 # Fallback method using sort -V
-                # This is less accurate but should work for most cases
                 local lowest=$(echo -e "$ver1\n$ver2" | sort -V | head -n 1)
                 if [[ "$lowest" == "$ver1" ]] && [[ "$ver1" != "$ver2" ]]; then
-                    echo 12  # ver1 < ver2
+                    return 12  # ver1 < ver2
                 elif [[ "$lowest" == "$ver2" ]] && [[ "$ver1" != "$ver2" ]]; then
-                    echo 11  # ver1 > ver2
+                    return 11  # ver1 > ver2
                 else
-                    echo 0   # ver1 == ver2
+                    return 0   # ver1 == ver2
                 fi
             fi
         }
@@ -69,44 +67,43 @@
         # Read the raw data line by line
         while IFS= read -r RAW_ENTRY; do
             if [[ -z "$RAW_ENTRY" ]]; then continue; fi
-
-            # Split using Bash Regex (name:version format)
-            regex='^([^:]+):(.*)$'
+    
+            # Parse package name and version-release from format: name-version-release
+            # Use rpm's own parsing to extract the name
+            PKG_NAME_LOOKUP=$(echo "$RAW_ENTRY" | rpm -q --queryformat '%{NAME}\n' --package - 2>/dev/null || echo "$RAW_ENTRY" | sed -E 's/-[0-9].*//')
             
-            if [[ "$RAW_ENTRY" =~ $regex ]]; then
-                PKG_NAME_LOOKUP="${BASH_REMATCH[1]}"
-                REQUIRED_EVR="${BASH_REMATCH[2]}"
-            else
-                echo "Failed to parse entry: $RAW_ENTRY" >&2
-                continue
-            fi
+            # Extract version-release (everything after the package name and first hyphen)
+            REQUIRED_VR=$(echo "$RAW_ENTRY" | sed "s/^$PKG_NAME_LOOKUP-//")
             
             # Sanity check
-            if [[ -z "$PKG_NAME_LOOKUP" ]] || [[ -z "$REQUIRED_EVR" ]]; then
+            if [[ -z "$PKG_NAME_LOOKUP" ]] || [[ -z "$REQUIRED_VR" ]]; then
                 echo "Invalid entry: $RAW_ENTRY" >&2
                 continue
             fi
             
-            # Query installed packages with full EVR (Epoch:Version-Release)
-            INSTALLED_EVRS=$(rpm -qa "$PKG_NAME_LOOKUP" --queryformat '%{EPOCH}:%{VERSION}-%{RELEASE}\n' 2>/dev/null | sed 's/^0://')
+            # Query installed packages with Version-Release only (no epoch needed for comparison)
+            INSTALLED_VRS=$(rpm -qa "$PKG_NAME_LOOKUP" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
             
-            if [[ -z "$INSTALLED_EVRS" ]]; then
-                echo "Package $PKG_NAME_LOOKUP not installed" >&2
+            if [[ -z "$INSTALLED_VRS" ]]; then
+                # Package not installed - skip silently (as requested)
                 continue
             fi
-
+    
             # Check each installed version
-            while IFS= read -r installed_evr; do
-                if [[ -z "$installed_evr" ]]; then continue; fi
+            while IFS= read -r installed_vr; do
+                if [[ -z "$installed_vr" ]]; then continue; fi
                 
                 # Compare installed version with required version
-                # Returns 12 if installed < required
-                if [[ $(compare_rpm_versions "$installed_evr" "$REQUIRED_EVR") -eq 12 ]]; then
+                compare_rpm_versions "$installed_vr" "$REQUIRED_VR"
+                RESULT=$?
+                
+                # If installed < required (exit code 12), report it
+                if [[ $RESULT -eq 12 ]]; then
                     # Package is deficient
-                    REPORT_DATA+="$HOST_NAME|$PKG_NAME_LOOKUP|$installed_evr|$REQUIRED_EVR\n"
+                    REPORT_DATA+="$HOST_NAME|$PKG_NAME_LOOKUP|$installed_vr|$REQUIRED_VR\n"
                     break  # Only report once per package name
                 fi
-            done <<< "$INSTALLED_EVRS"
+            done <<< "$INSTALLED_VRS"
             
         done <<< "$REQUIRED_RAW_DATA"
         
@@ -114,6 +111,7 @@
         echo -e "$REPORT_DATA"
       register: package_check_results
       changed_when: false
+
 
     - name: Generate and write a single combined report
       delegate_to: localhost
