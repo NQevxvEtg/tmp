@@ -1,20 +1,25 @@
+---
 - name: Check RHEL package versions
   ignore_unreachable: yes
   hosts: reachable
   become: true
+  
   vars_files:
-    - ../../vaults/vbox_vault.yml
+    - ../../vaults/vbox_vault.yml 
   vars:
     ansible_become_password: "{{ remote_host_become_pass }}"
     ansible_remote_tmp: /var/ansible_tmp
-    # Pass the raw lines directly to the shell script
-    required_packages_raw: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() | map('trim') | reject('equalto', '') | list }}"
+    
+    # Pass the entire file content formatted as a newline-separated string
+    # We use join('\n') to ensure it is a single, clean string variable
+    required_packages_raw_data: "{{ lookup('file', playbook_dir + '/../../files/package_versions.txt').splitlines() | map('trim') | reject('equalto', '') | join('\n') }}"
     output_file: "{{ playbook_dir }}/../../files/rhel_vulnerability_report.txt"
 
   tasks:
     - name: Get primary group for local file permissions
       delegate_to: localhost
-      ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
+      ansible.builtin.shell: 
+        cmd: id -gn {{ lookup('env', 'USER') }}
       register: primary_group
       changed_when: false
 
@@ -22,97 +27,88 @@
       ansible.builtin.shell: |
         #!/bin/bash
         
-        # --- Package Data Template (Injected by Ansible) ---
-        REQUIRED_RAW=(
-        {% for line in required_packages_raw %}
-          "{{ line }}"
-        {% endfor %}
-        )
-        # ----------------------------------------------------
+        # Injected newline-separated string of requirements
+        REQUIRED_RAW_DATA="{{ required_packages_raw_data }}"
         
         REPORT_DATA=""
         HOST_NAME="{{ inventory_hostname }}"
         
-        # Iterate over the injected array
-        for RAW_ENTRY in "${REQUIRED_RAW[@]}"; do
+        # Read the raw data line by line
+        while IFS= read -r RAW_ENTRY; do
             if [[ -z "$RAW_ENTRY" ]]; then continue; fi
 
-            # --- 1. Reliable Split using SED ---
-            # PKG_PREFIX\nREQUIRED_EVR
+            # --- 1. Robust Split using Bash Regex ---
+            # Find the package name prefix and the minimum required EVR
+            # e.g., 'bash-4.4.18-15.el8' -> PKG_NAME_PREFIX='bash', REQUIRED_EVR='4.4.18-15.el8'
             
-            # Use sed to generate two lines
-            SPLIT_DATA=$(echo "$RAW_ENTRY" | sed -r 's/^(.*)-([0-9].*)$/\1\n\2/')
+            # Regex to capture everything preceding the last hyphen, and the EVR starting with a digit.
+            regex='(.*)-([0-9].*)'
             
-            # Check if sed successfully generated two lines
-            if [[ $(echo "$SPLIT_DATA" | wc -l) -ne 2 ]]; then
-                # Unable to parse this line, skip
+            if [[ "$RAW_ENTRY" =~ $regex ]]; then
+                PKG_NAME_LOOKUP="${BASH_REMATCH[1]}" # e.g., 'bash-completion'
+                REQUIRED_EVR="${BASH_REMATCH[2]}"    # e.g., '2.7.1-5.el8'
+            else
+                continue # Failed to parse
+            fi
+            
+            # Sanity check
+            if [[ -z "$PKG_NAME_LOOKUP" ]] || [[ -z "$REQUIRED_EVR" ]]; then
                 continue
             fi
             
-            # FIX: Use simple pipe and read to capture the two separated lines, 
-            # ensuring compatibility with older Bash versions.
+            # --- 2. Query Installed Versions ---
+            # Get only Version-Release (V-R) for comparison, one per line.
+            # Using V-R is simpler for sort -V if we don't need Epoch.
+            INSTALLED_EVRS=$(rpm -qa "$PKG_NAME_LOOKUP" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
             
-            # Using a heredoc or pipe to feed the two lines into sequential read commands
-            read -r PKG_NAME_PREFIX REQUIRED_EVR < <(echo "$SPLIT_DATA" | tr '\n' ' ')
-            
-            # If the parsing failed and REQUIRED_EVR is empty, skip.
-            if [[ -z "$REQUIRED_EVR" ]]; then continue; fi
-
-            # --- 2. Determine Base Package Name ---
-            # Heuristic for Kernel/versioned packages: 'kernel-4.18.0' -> 'kernel'
-            PKG_NAME_BASE="$PKG_NAME_PREFIX"
-            if [[ "$PKG_NAME_PREFIX" =~ -[0-9] ]]; then
-                PKG_NAME_BASE="${PKG_NAME_PREFIX%%-*}"
-            fi
-            
-            # --- 3. Query Installed Versions ---
-            
-            INSTALLED_EVRS=$(rpm -qa "$PKG_NAME_BASE" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
-            
-            # Requirement #2: If not installed, skip the report entirely.
             if [[ -z "$INSTALLED_EVRS" ]]; then
-                continue
+                continue # Package not installed
             fi
 
-            # --- 4. Comparison Logic ---
+            # --- 3. Comparison Logic ---
             
-            MEETS_REQUIREMENT=0
-            OLDEST_DEFICIENT_EVR=""
+            ALL_INSTALLED_COMPLIANT=1
+            OLDEST_DEFICIENT_EVR="" # Tracks the lowest installed V-R that is deficient
 
             # Read installed versions line by line
-            while IFS= read -r installed_evr; do
-                if [[ -z "$installed_evr" ]]; then continue; fi 
+            while IFS= read -r installed_vr; do
+                if [[ -z "$installed_vr" ]]; then continue; }
                 
-                # Comparison string: installed_evr\nrequired_evr
-                FIRST_VERSION=$(echo -e "$installed_evr\n$REQUIRED_EVR" | sort -V | head -n 1)
+                # Comparison: Check if the installed version is STRICTLY older than the required version.
+                # If installed_vr < REQUIRED_EVR, it means installed version is deficient.
+                
+                # Check 1: Use sort -V to find the lowest version between installed and required.
+                # If the lowest version is the installed one, and they are not identical, it's deficient.
+                
+                # Feed both versions, separated by newline, into sort -V and grab the first (lowest) line.
+                LOWEST_VERSION=$(echo -e "$installed_vr\n$REQUIRED_EVR" | sort -V | head -n 1)
 
-                if [[ "$FIRST_VERSION" == "$installed_evr" ]] && [[ "$installed_evr" != "$REQUIRED_EVR" ]]; then
-                    # Installed version is deficient. Track the oldest deficient one.
+                if [[ "$LOWEST_VERSION" == "$installed_vr" ]] && [[ "$installed_vr" != "$REQUIRED_EVR" ]]; then
+                    # The installed version is deficient (strictly older)
+                    ALL_INSTALLED_COMPLIANT=0
                     
+                    # Track the oldest deficient package found so far
                     if [[ -z "$OLDEST_DEFICIENT_EVR" ]]; then
-                       OLDEST_DEFICIENT_EVR="$installed_evr"
+                       OLDEST_DEFICIENT_EVR="$installed_vr"
                     else
-                        # Compare stored oldest vs current installed
-                        LOWEST_CHECK=$(echo -e "$installed_evr\n$OLDEST_DEFICIENT_EVR" | sort -V | head -n 1)
-                        if [[ "$LOWEST_CHECK" == "$installed_evr" ]]; then
-                            # New installed version is even older than the previously tracked one
-                            OLDEST_DEFICIENT_EVR="$installed_evr"
+                        # Compare: Is the current deficient installed_vr older than the tracked one?
+                        OLDEST_CHECK=$(echo -e "$installed_vr\n$OLDEST_DEFICIENT_EVR" | sort -V | head -n 1)
+                        if [[ "$OLDEST_CHECK" == "$installed_vr" ]]; then
+                            # Yes, the current one is older (more deficient)
+                            OLDEST_DEFICIENT_EVR="$installed_vr"
                         fi
                     fi
-                else
-                    # Installed version meets or exceeds requirement
-                    MEETS_REQUIREMENT=1
-                    break 
                 fi
             done <<< "$INSTALLED_EVRS"
             
-            # --- 5. Final Reporting (Only report deficiencies) ---
-            
-            if [[ "$MEETS_REQUIREMENT" -eq 0 ]] && [[ -n "$OLDEST_DEFICIENT_EVR" ]]; then
-                REPORT_DATA+="$HOST_NAME|$PKG_NAME_BASE|$OLDEST_DEFICIENT_EVR|$REQUIRED_EVR\n"
+            # --- 4. Final Reporting ---
+            # If any installed package for this base name failed the requirement:
+            if [[ "$ALL_INSTALLED_COMPLIANT" -eq 0 ]] && [[ -n "$OLDEST_DEFICIENT_EVR" ]]; then
+                # Report the oldest deficient installed version against the required minimum.
+                REPORT_DATA+="$HOST_NAME|$PKG_NAME_LOOKUP|$OLDEST_DEFICIENT_EVR|$REQUIRED_EVR\n"
             fi
             
-        done # End of RAW_ENTRY loop
+        done <<< "$REQUIRED_RAW_DATA" # Feed the main requirement list into the loop
         
         echo -e "$REPORT_DATA"
       register: package_check_results
@@ -124,7 +120,7 @@
       ansible.builtin.copy:
         content: |
           # Package Version Deficiencies Report
-          # Generated at: {{ ansible_date_time.iso8601 | regex_replace('\\..*$', '') }}
+          # Generated by Ansible at: {{ ansible_date_time.iso8601 | regex_replace('\\..*$', '') }}
           # -------------------------------------------------------------
           # HOSTNAME,PACKAGE_NAME,INSTALLED_VERSION,REQUIRED_MINIMUM_VERSION
 
@@ -141,5 +137,5 @@
           {% endfor %}
         dest: "{{ output_file }}"
         owner: "{{ lookup('env', 'USER') }}"
-        group: "{{ primary_group.stdout }}"
+        group: "{{ primary_group.stdout | default(omit) }}"
         mode: '0644'
