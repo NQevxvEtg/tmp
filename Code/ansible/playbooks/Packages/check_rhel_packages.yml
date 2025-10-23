@@ -68,12 +68,12 @@
         while IFS= read -r RAW_ENTRY; do
             if [[ -z "$RAW_ENTRY" ]]; then continue; fi
     
-            # Parse package name and version-release from format: name-version-release
-            # Use rpm's own parsing to extract the name
-            PKG_NAME_LOOKUP=$(echo "$RAW_ENTRY" | rpm -q --queryformat '%{NAME}\n' --package - 2>/dev/null || echo "$RAW_ENTRY" | sed -E 's/-[0-9].*//')
+            # Parse package name from format: name-version-release
+            # Extract everything before the first hyphen followed by a digit
+            PKG_NAME_LOOKUP=$(echo "$RAW_ENTRY" | sed -E 's/-[0-9].*//')
             
             # Extract version-release (everything after the package name and first hyphen)
-            REQUIRED_VR=$(echo "$RAW_ENTRY" | sed "s/^$PKG_NAME_LOOKUP-//")
+            REQUIRED_VR="${RAW_ENTRY#${PKG_NAME_LOOKUP}-}"
             
             # Sanity check
             if [[ -z "$PKG_NAME_LOOKUP" ]] || [[ -z "$REQUIRED_VR" ]]; then
