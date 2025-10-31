@@ -2,16 +2,15 @@
 
 #
 # ========================================================================================
-# configure_live_mounts.sh (v10 - Bulletproof fstab & Readability)
-# ----------------------------------------------------------------
+# configure_live_mounts.sh (v12 - Production Ready)
+# -------------------------------------------------------------------------
 # This script automates Phase 3 of the LVM setup on a LIVE, SELinux-enabled system.
 #
-# DEFINITIVE FIXES in v10:
-# - Fixes fstab corruption by replacing `printf` with the more reliable `echo -e`
-#   command, which guarantees each new entry is on its own line.
-# - Improves script readability by formatting array declarations on multiple lines.
-# - Retains all previous safety features (graceful rsync error handling, lazy unmounts,
-#   SELinux autorelabel, auditd handling).
+# DEFINITIVE FIXES in v12:
+# - FIXES wasteful data copy by explicitly excluding the nested `/var/oled` mount point
+#   from the parent `/var` rsync operation. This is the correct, efficient method.
+# - Retains all previous safety features: reliable rsync exit code handling (`set -e`
+#   safe), bulletproof `fstab` updates, and pre-creation of known mount points.
 #
 # ========================================================================================
 #
@@ -26,11 +25,11 @@ run_rsync() {
     local destination=$2
     shift 2
     local extra_args=("$@")
+    local RSYNC_EXIT_CODE=0
 
     echo "    - rsync'ing ${source} to ${destination}..."
-    # Use specific flags to avoid errors on special files, but allow common live-fs errors
-    rsync -rlptgovX "${extra_args[@]}" "${source}" "${destination}"
-    local RSYNC_EXIT_CODE=$?
+    # The `|| RSYNC_EXIT_CODE=$?` structure prevents `set -e` from halting the script
+    rsync -rlptgovX "${extra_args[@]}" "${source}" "${destination}" || RSYNC_EXIT_CODE=$?
 
     if [[ $RSYNC_EXIT_CODE -eq 23 || $RSYNC_EXIT_CODE -eq 24 ]]; then
         echo "    - (OK/Warning) rsync finished with code ${RSYNC_EXIT_CODE}. This is acceptable for a live migration and the process will continue."
@@ -50,7 +49,6 @@ fi
 MIGRATION_ROOT="/mnt/migration_root"
 FSTAB_FILE="/etc/fstab"
 
-# FIX: Improved readability for array declarations
 declare -A LV_CONFIG
 LV_CONFIG["home"]="nodev"
 LV_CONFIG["tmp"]="noexec,nosuid,nodev"
@@ -98,7 +96,8 @@ done
 run_rsync /home/ "${MIGRATION_ROOT}/home/"
 run_rsync /tmp/ "${MIGRATION_ROOT}/tmp/"
 run_rsync /opt/ "${MIGRATION_ROOT}/opt/"
-run_rsync /var/ "${MIGRATION_ROOT}/var/" --exclude='/var/run' --exclude='/var/lock'
+# FIX: Exclude known nested mount points to prevent wasteful data copying.
+run_rsync /var/ "${MIGRATION_ROOT}/var/" --exclude='/var/run' --exclude='/var/lock' --exclude='/var/oled'
 
 echo "    - Unmounting all temporary filesystems (using lazy unmount)..."
 for (( idx=${#MOUNT_ORDER[@]}-1 ; idx>=0 ; idx-- )) ; do
@@ -117,7 +116,7 @@ for path in "${!TOP_LEVEL_DIRS[@]}"; do
     mkdir -p "$path"
 done
 
-# --- 4. Update /etc/fstab (Bulletproof Method)
+# --- 4. Update /etc/fstab
 echo ">>> Phase 3.3: Updating /etc/fstab..."
 FSTAB_BACKUP="/etc/fstab.bak.$(date +%F-%T)"
 echo "    - Backing up current fstab to ${FSTAB_BACKUP}"; cp "$FSTAB_FILE" "$FSTAB_BACKUP"
@@ -134,16 +133,16 @@ for lv_name in "${MOUNT_ORDER[@]}"; do
     fi
     uuid=$(blkid -s UUID -o value "$device_path")
     if [[ -z "$uuid" ]]; then echo "    - ERROR: Could not find UUID for ${device_path}. Aborting." >&2; exit 1; fi
-
-    # FIX: Use `echo -e` for guaranteed newlines and tab interpretation. This is the most reliable method.
     echo -e "UUID=${uuid}\t${mount_path}\txfs\t${options}\t0 0" >> "$FSTAB_FILE"
 done
-echo "    - fstab update complete. Please verify the contents of /etc/fstab."
+echo "    - fstab update complete."
 
 # --- 5. Mount All & Prepare for SELinux Relabel
-echo ">>> Phase 3.4: Mounting all filesystems & preparing for SELinux relabel..."
-mkdir -p /opt/McAfee /var/log /var/log/audit /var/tmp
-echo "    - Running 'mount -a'..."; mount -a
+echo ">>> Phase 3.4: Re-creating nested mount points & preparing for SELinux relabel..."
+# Re-create any known nested mount points that were inside the migrated directories.
+mkdir -p /opt/McAfee /var/log /var/log/audit /var/tmp /var/oled
+
+echo "    - Running 'mount -a' to mount all filesystems..."; mount -a
 
 echo "    - IMPORTANT: Creating /.autorelabel to trigger a full SELinux relabel on next boot."; touch /.autorelabel
 
