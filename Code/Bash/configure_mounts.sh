@@ -2,15 +2,16 @@
 
 #
 # ========================================================================================
-# configure_live_mounts.sh (v13 - Final Production Version)
+# configure_live_mounts.sh (v14 - Final Bulletproof Version)
 # -------------------------------------------------------------------------
 # This script automates Phase 3 of the LVM setup on a LIVE, SELinux-enabled system.
 #
-# DEFINITIVE FIXES in v13:
-# - FIXES "ghost mount" race condition by explicitly unmounting all nested filesystems
-#   (like /var/oled) BEFORE renaming their parent directory (/var). This is the only
-#   truly safe method and prevents the mount point from "escaping" into the .old dir.
-# - Retains all previous safety features.
+# DEFINITIVE FIXES in v14:
+# - FIXES `target is busy` error by using `umount -l` (lazy unmount) on nested
+#   filesystems. This immediately detaches the filesystem from its mount point,
+#   allowing the script to proceed without being blocked by a busy process, which is
+#   critical for the safety of the subsequent `mv` command.
+# - Retains all previous safety features. This version is maximally robust for live environments.
 #
 # ========================================================================================
 #
@@ -47,7 +48,7 @@ fi
 # --- Configuration
 MIGRATION_ROOT="/mnt/migration_root"
 FSTAB_FILE="/etc/fstab"
-# Add any other known nested mount points here (e.g., /var/lib/containers)
+# Add any other known nested mount points here that need to be unmounted first.
 PRE_UNMOUNTS=("/var/oled")
 
 declare -A LV_CONFIG
@@ -89,10 +90,11 @@ echo "    - Service stop phase complete."
 # --- 2. CRITICAL: Unmount Nested Filesystems (Anti-Race-Condition)
 echo ">>> Phase 3.1: Unmounting nested filesystems to prevent 'ghost mounts'..."
 for mount_point in "${PRE_UNMOUNTS[@]}"; do
-    # Check if it's actually a mount point before trying to unmount
     if findmnt -rno TARGET "$mount_point" > /dev/null; then
-        echo "    - Unmounting ${mount_point}..."
-        umount "$mount_point"
+        # FIX: Use `umount -l` (lazy) to avoid "target is busy" errors on a live system.
+        # This detaches the filesystem from the directory tree immediately so `mv` is safe.
+        echo "    - Performing lazy unmount on ${mount_point}..."
+        umount -l "$mount_point"
     else
         echo "    - (Info) ${mount_point} is not a mount point, skipping unmount."
     fi
@@ -109,7 +111,6 @@ done
 run_rsync /home/ "${MIGRATION_ROOT}/home/"
 run_rsync /tmp/ "${MIGRATION_ROOT}/tmp/"
 run_rsync /opt/ "${MIGRATION_ROOT}/opt/"
-# Exclude known mount points to prevent conflicts and wasted I/O
 run_rsync /var/ "${MIGRATION_ROOT}/var/" --exclude='/var/run' --exclude='/var/lock' --exclude='/var/oled'
 
 echo "    - Unmounting all temporary filesystems (using lazy unmount)..."
@@ -138,7 +139,8 @@ echo "" >> "$FSTAB_FILE"; echo "# Added by LVM migration script on $(date)" >> "
 for lv_name in "${MOUNT_ORDER[@]}"; do
     mount_path="${LV_PATHS[$lv_name]}"; options="defaults,${LV_CONFIG[$lv_name]}"; device_path="/dev/ocivolume/${lv_name}"
     if grep -qE "[\s|	]${mount_path}[\s|	]" "$FSTAB_FILE"; then continue; fi
-    uuid=$(blkid -s UUID -o value "$device_path"); if [[ -z "$uuid" ]]; then echo "ERROR" >&2; exit 1; fi
+    uuid=$(blkid -s UUID -o value "$device_path")
+    if [[ -z "$uuid" ]]; then echo "    - ERROR: Could not find UUID for ${device_path}. Aborting." >&2; exit 1; fi
     echo -e "UUID=${uuid}\t${mount_path}\txfs\t${options}\t0 0" >> "$FSTAB_FILE"
 done
 echo "    - fstab update complete."
