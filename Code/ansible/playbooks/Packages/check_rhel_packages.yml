@@ -32,7 +32,7 @@
       register: primary_group
       changed_when: false
 
-    - name: Execute single-pass, optimized version check (v4)
+    - name: Execute single-pass, optimized version check (v5 - Robust Name/EVR)
       ansible.builtin.shell: |
         #!/bin/bash
         
@@ -44,18 +44,19 @@
         
         # Function to compare RPM versions using rpmdev-vercmp
         compare_rpm_versions() {
-            local ver1="$1"
-            local ver2="$2"
+            local installed_evr="$1"
+            local required_vr="$2"
             
             if command -v rpmdev-vercmp >/dev/null 2>&1; then
-                rpmdev-vercmp "$ver1" "$ver2" >/dev/null 2>&1
+                rpmdev-vercmp "$installed_evr" "$required_vr" >/dev/null 2>&1
                 local result=$?
                 if [[ "$DEBUG_MODE" == "true" ]]; then
-                    echo "DEBUG: Compare stripped installed: $ver1 required: $ver2 -> rpmdev-vercmp result: $result" >&2
+                    # Output debug to stderr so it doesn't pollute the report data
+                    echo "DEBUG: Compare installed: $installed_evr required: $required_vr -> result: $result" >&2
                 fi
                 return $result
             else
-                # Fallback logic (omitted for brevity)
+                # Fallback implementation (omitted)
                 return 0
             fi
         }
@@ -64,50 +65,54 @@
         while IFS= read -r RAW_ENTRY; do
             if [[ -z "$RAW_ENTRY" ]]; then continue; fi
     
-            # 1. Robustly split NAME from VERSION-RELEASE
-            if [[ "$RAW_ENTRY" =~ ^(.*)-([0-9].*)$ ]]; then
-                PKG_NAME_LOOKUP="${BASH_REMATCH[1]}" 
-                REQUIRED_VR="${BASH_REMATCH[2]}"    
-            else
+            # 1. Robustly split NAME from VERSION-RELEASE using parameter expansion
+            # Assumes the V-R is everything after the final hyphen
+            
+            PKG_NAME_LOOKUP="${RAW_ENTRY%-*}" 
+            REQUIRED_VR="${RAW_ENTRY##*-}"
+            
+            if [[ "$PKG_NAME_LOOKUP" == "$RAW_ENTRY" ]]; then
+                # Handle cases where the entry contains no hyphen (e.g., skip malformed lines)
+                if [[ "$DEBUG_MODE" == "true" ]]; then
+                    echo "DEBUG: Skipping potentially malformed entry: $RAW_ENTRY" >&2
+                fi
                 continue
             fi
             
             # 2. Filter out packages meant for other major OS versions
-            if [[ "$REQUIRED_VR" =~ \.el([0-9]+)$ ]]; then
+            # Note: This step is crucial for entries like 'bpftool-4.18.0-553.69.1.el8_10'
+            if [[ "$REQUIRED_VR" =~ \.el([0-9]+) ]]; then
                 REQUIRED_OS_VERSION="${BASH_REMATCH[1]}"
                 if [[ "$REQUIRED_OS_VERSION" != "$HOST_MAJOR_VERSION" ]]; then
                     continue
                 fi
             fi
             
-            # 3. Query installed packages (returns VERSION-RELEASE.ARCH)
-            INSTALLED_VRS=$(rpm -qa "$PKG_NAME_LOOKUP" --queryformat '%{VERSION}-%{RELEASE}\n' 2>/dev/null)
+            # 3. Query installed packages, getting the full E:V-R string
+            INSTALLED_EVRS=$(rpm -qa "$PKG_NAME_LOOKUP" --queryformat '%{EVR}\n' 2>/dev/null)
             
-            if [[ -z "$INSTALLED_VRS" ]]; then
+            if [[ -z "$INSTALLED_EVRS" ]]; then
                 if [[ "$DEBUG_MODE" == "true" ]]; then
-                    echo "DEBUG: Package not installed: $PKG_NAME_LOOKUP" >&2
+                    echo "DEBUG: Package not installed or lookup failed for: $PKG_NAME_LOOKUP" >&2
                 fi
                 continue
             fi
     
             # 4. Check each installed version
-            while IFS= read -r installed_vr_raw; do
-                if [[ -z "$installed_vr_raw" ]]; then continue; fi
+            VULNERABLE=0
+            while IFS= read -r installed_evr; do
+                if [[ -z "$installed_evr" ]]; then continue; fi
                 
-                # Strip common architecture tags (.x86_64, .noarch, etc.) from the installed V-R string
-                installed_vr=$(echo "$installed_vr_raw" | sed -E 's/\.(aarch64|x86_64|i[3-6]86|noarch)$//')
-
-                # Compare the stripped installed version with the required version
-                compare_rpm_versions "$installed_vr" "$REQUIRED_VR"
+                compare_rpm_versions "$installed_evr" "$REQUIRED_VR"
                 RESULT=$?
                 
                 # If installed < required (exit code 12), report it
                 if [[ $RESULT -eq 12 ]]; then
-                    # Report using the stripped installed version
-                    REPORT_DATA+="$HOST_NAME|$PKG_NAME_LOOKUP|$installed_vr|$REQUIRED_VR\n"
-                    break
+                    REPORT_DATA+="$HOST_NAME|$PKG_NAME_LOOKUP|$installed_evr|$REQUIRED_VR\n"
+                    VULNERABLE=1
+                    break # Stop checking this package if one installed version is vulnerable
                 fi
-            done <<< "$INSTALLED_VRS"
+            done <<< "$INSTALLED_EVRS"
             
         done <<< "$REQUIRED_RAW_DATA"
         
