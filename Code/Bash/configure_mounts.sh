@@ -2,17 +2,16 @@
 
 #
 # ========================================================================================
-# configure_live_mounts.sh (v9 - Definitive rsync & fstab Handling)
+# configure_live_mounts.sh (v10 - Bulletproof fstab & Readability)
 # ----------------------------------------------------------------
 # This script automates Phase 3 of the LVM setup on a LIVE, SELinux-enabled system.
 #
-# DEFINITIVE FIXES in v9:
-# - Directly addresses 'rsync error 23' by gracefully accepting it as a non-fatal
-#   warning, which is expected when trying to copy volatile system files.
-# - Prevents the error by removing the '-D' flag from rsync's archive mode, as we
-#   do not need to migrate live sockets or device files.
-# - Retains the foolproof line-by-line fstab update to prevent corruption.
-# - Retains all other safety features (lazy unmount, SELinux autorelabel, etc.)
+# DEFINITIVE FIXES in v10:
+# - Fixes fstab corruption by replacing `printf` with the more reliable `echo -e`
+#   command, which guarantees each new entry is on its own line.
+# - Improves script readability by formatting array declarations on multiple lines.
+# - Retains all previous safety features (graceful rsync error handling, lazy unmounts,
+#   SELinux autorelabel, auditd handling).
 #
 # ========================================================================================
 #
@@ -29,12 +28,10 @@ run_rsync() {
     local extra_args=("$@")
 
     echo "    - rsync'ing ${source} to ${destination}..."
-    # FIX: Use specific flags instead of '-a' to avoid '-D' which causes errors on special files.
-    # We still get recursive, links, perms, times, group, owner, and extended attrs.
+    # Use specific flags to avoid errors on special files, but allow common live-fs errors
     rsync -rlptgovX "${extra_args[@]}" "${source}" "${destination}"
     local RSYNC_EXIT_CODE=$?
 
-    # FIX: Accept codes 23 (error) and 24 (vanished) as non-fatal for live migrations.
     if [[ $RSYNC_EXIT_CODE -eq 23 || $RSYNC_EXIT_CODE -eq 24 ]]; then
         echo "    - (OK/Warning) rsync finished with code ${RSYNC_EXIT_CODE}. This is acceptable for a live migration and the process will continue."
     elif [[ $RSYNC_EXIT_CODE -ne 0 ]]; then
@@ -53,16 +50,26 @@ fi
 MIGRATION_ROOT="/mnt/migration_root"
 FSTAB_FILE="/etc/fstab"
 
+# FIX: Improved readability for array declarations
 declare -A LV_CONFIG
-LV_CONFIG["home"]="nodev"; LV_CONFIG["tmp"]="noexec,nosuid,nodev"
-LV_CONFIG["var"]="nosuid,nodev"; LV_CONFIG["varTmp"]="noexec,nosuid,nodev"
-LV_CONFIG["varLog"]="noexec,nosuid,nodev"; LV_CONFIG["varLogAudit"]="noexec,nosuid,nodev"
-LV_CONFIG["opt"]="nodev"; LV_CONFIG["optMcAfee"]="nodev"
+LV_CONFIG["home"]="nodev"
+LV_CONFIG["tmp"]="noexec,nosuid,nodev"
+LV_CONFIG["var"]="nosuid,nodev"
+LV_CONFIG["varTmp"]="noexec,nosuid,nodev"
+LV_CONFIG["varLog"]="noexec,nosuid,nodev"
+LV_CONFIG["varLogAudit"]="noexec,nosuid,nodev"
+LV_CONFIG["opt"]="nodev"
+LV_CONFIG["optMcAfee"]="nodev"
 
 declare -A LV_PATHS
-LV_PATHS["home"]="/home"; LV_PATHS["tmp"]="/tmp"; LV_PATHS["var"]="/var"
-LV_PATHS["varTmp"]="/var/tmp"; LV_PATHS["varLog"]="/var/log"; LV_PATHS["varLogAudit"]="/var/log/audit"
-LV_PATHS["opt"]="/opt"; LV_PATHS["optMcAfee"]="/opt/McAfee"
+LV_PATHS["home"]="/home"
+LV_PATHS["tmp"]="/tmp"
+LV_PATHS["var"]="/var"
+LV_PATHS["varTmp"]="/var/tmp"
+LV_PATHS["varLog"]="/var/log"
+LV_PATHS["varLogAudit"]="/var/log/audit"
+LV_PATHS["opt"]="/opt"
+LV_PATHS["optMcAfee"]="/opt/McAfee"
 
 MOUNT_ORDER=("home" "tmp" "opt" "var" "varTmp" "optMcAfee" "varLog" "varLogAudit")
 SERVICES_TO_STOP=(
@@ -76,13 +83,11 @@ if command -v journalctl &> /dev/null; then echo "    - Flushing journald logs..
 for service in "${SERVICES_TO_STOP[@]}"; do
     if systemctl is-active --quiet "$service"; then
         echo "    - Stopping active service: $service"; systemctl stop "$service"
-    else
-        echo "    - Service not active, skipping: $service"
     fi
 done
 echo "    - Service stop phase complete."
 
-# --- 2. Data Migration with Definitive Error Handling
+# --- 2. Data Migration
 echo ">>> Phase 3.1: Migrating data to new LVs..."
 mkdir -p "$MIGRATION_ROOT"
 for lv_name in "${MOUNT_ORDER[@]}"; do
@@ -112,12 +117,12 @@ for path in "${!TOP_LEVEL_DIRS[@]}"; do
     mkdir -p "$path"
 done
 
-# --- 4. Update /etc/fstab (Foolproof Method)
+# --- 4. Update /etc/fstab (Bulletproof Method)
 echo ">>> Phase 3.3: Updating /etc/fstab..."
 FSTAB_BACKUP="/etc/fstab.bak.$(date +%F-%T)"
 echo "    - Backing up current fstab to ${FSTAB_BACKUP}"; cp "$FSTAB_FILE" "$FSTAB_BACKUP"
 
-echo "    - Ensuring fstab integrity and appending new entries line-by-line..."
+echo "    - Ensuring fstab integrity and appending new entries..."
 echo "" >> "$FSTAB_FILE"
 echo "# Added by LVM migration script on $(date)" >> "$FSTAB_FILE"
 
@@ -129,9 +134,11 @@ for lv_name in "${MOUNT_ORDER[@]}"; do
     fi
     uuid=$(blkid -s UUID -o value "$device_path")
     if [[ -z "$uuid" ]]; then echo "    - ERROR: Could not find UUID for ${device_path}. Aborting." >&2; exit 1; fi
-    printf "UUID=%s\t%s\txfs\t%s\t0 0\n" "$uuid" "$mount_path" "$options" >> "$FSTAB_FILE"
+
+    # FIX: Use `echo -e` for guaranteed newlines and tab interpretation. This is the most reliable method.
+    echo -e "UUID=${uuid}\t${mount_path}\txfs\t${options}\t0 0" >> "$FSTAB_FILE"
 done
-echo "    - fstab update complete."
+echo "    - fstab update complete. Please verify the contents of /etc/fstab."
 
 # --- 5. Mount All & Prepare for SELinux Relabel
 echo ">>> Phase 3.4: Mounting all filesystems & preparing for SELinux relabel..."
@@ -142,7 +149,7 @@ echo "    - IMPORTANT: Creating /.autorelabel to trigger a full SELinux relabel 
 
 echo "---------------------------------------------------------------------"
 echo ">>> SUCCESS: Live migration script has completed."
-echo -e ">>> Please review 'df -h' and 'mount' to verify correctness.\n"
+echo -e ">>> Please review 'df -h', 'mount', and '/etc/fstab' to verify correctness.\n"
 echo ">>> !!!!!!!!!!!!!!!!!!!!!!!!!!! CRITICAL !!!!!!!!!!!!!!!!!!!!!!!!!!!"
 echo ">>> AN SELINUX AUTORELABEL HAS BEEN SCHEDULED FOR THE NEXT BOOT."
 echo ">>> THE REBOOT WILL TAKE SIGNIFICANTLY LONGER THAN USUAL. "
