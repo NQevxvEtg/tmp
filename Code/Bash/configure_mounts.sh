@@ -2,15 +2,15 @@
 
 #
 # ========================================================================================
-# configure_live_mounts.sh (v12 - Production Ready)
+# configure_live_mounts.sh (v13 - Final Production Version)
 # -------------------------------------------------------------------------
 # This script automates Phase 3 of the LVM setup on a LIVE, SELinux-enabled system.
 #
-# DEFINITIVE FIXES in v12:
-# - FIXES wasteful data copy by explicitly excluding the nested `/var/oled` mount point
-#   from the parent `/var` rsync operation. This is the correct, efficient method.
-# - Retains all previous safety features: reliable rsync exit code handling (`set -e`
-#   safe), bulletproof `fstab` updates, and pre-creation of known mount points.
+# DEFINITIVE FIXES in v13:
+# - FIXES "ghost mount" race condition by explicitly unmounting all nested filesystems
+#   (like /var/oled) BEFORE renaming their parent directory (/var). This is the only
+#   truly safe method and prevents the mount point from "escaping" into the .old dir.
+# - Retains all previous safety features.
 #
 # ========================================================================================
 #
@@ -28,11 +28,10 @@ run_rsync() {
     local RSYNC_EXIT_CODE=0
 
     echo "    - rsync'ing ${source} to ${destination}..."
-    # The `|| RSYNC_EXIT_CODE=$?` structure prevents `set -e` from halting the script
     rsync -rlptgovX "${extra_args[@]}" "${source}" "${destination}" || RSYNC_EXIT_CODE=$?
 
     if [[ $RSYNC_EXIT_CODE -eq 23 || $RSYNC_EXIT_CODE -eq 24 ]]; then
-        echo "    - (OK/Warning) rsync finished with code ${RSYNC_EXIT_CODE}. This is acceptable for a live migration and the process will continue."
+        echo "    - (OK/Warning) rsync finished with code ${RSYNC_EXIT_CODE}. This is acceptable and will be ignored."
     elif [[ $RSYNC_EXIT_CODE -ne 0 ]]; then
         echo "    - !!! CRITICAL ERROR: rsync failed with unexpected exit code ${RSYNC_EXIT_CODE}. Aborting. !!!" >&2
         exit $RSYNC_EXIT_CODE
@@ -48,6 +47,8 @@ fi
 # --- Configuration
 MIGRATION_ROOT="/mnt/migration_root"
 FSTAB_FILE="/etc/fstab"
+# Add any other known nested mount points here (e.g., /var/lib/containers)
+PRE_UNMOUNTS=("/var/oled")
 
 declare -A LV_CONFIG
 LV_CONFIG["home"]="nodev"
@@ -71,11 +72,11 @@ LV_PATHS["optMcAfee"]="/opt/McAfee"
 
 MOUNT_ORDER=("home" "tmp" "opt" "var" "varTmp" "optMcAfee" "varLog" "varLogAudit")
 SERVICES_TO_STOP=(
-    rsyslog crond atd httpd nginx mariadb mysqld postgresql postfix sendmail
+    rsyslog crond atd httpd nginx mariadb mysqld postgresql postfix sendmail docker podman
 )
 
 # --- 1. Stop Services & Disable Auditing
-echo ">>> Phase 3.0: Automatically stopping services & disabling auditing..."
+echo ">>> Phase 3.0: Stopping services..."
 if systemctl is-active --quiet auditd; then echo "    - Disabling audit rule generation with 'auditctl -e 0'"; auditctl -e 0; fi
 if command -v journalctl &> /dev/null; then echo "    - Flushing journald logs..."; journalctl --flush || true; fi
 for service in "${SERVICES_TO_STOP[@]}"; do
@@ -85,8 +86,20 @@ for service in "${SERVICES_TO_STOP[@]}"; do
 done
 echo "    - Service stop phase complete."
 
-# --- 2. Data Migration
-echo ">>> Phase 3.1: Migrating data to new LVs..."
+# --- 2. CRITICAL: Unmount Nested Filesystems (Anti-Race-Condition)
+echo ">>> Phase 3.1: Unmounting nested filesystems to prevent 'ghost mounts'..."
+for mount_point in "${PRE_UNMOUNTS[@]}"; do
+    # Check if it's actually a mount point before trying to unmount
+    if findmnt -rno TARGET "$mount_point" > /dev/null; then
+        echo "    - Unmounting ${mount_point}..."
+        umount "$mount_point"
+    else
+        echo "    - (Info) ${mount_point} is not a mount point, skipping unmount."
+    fi
+done
+
+# --- 3. Data Migration
+echo ">>> Phase 3.2: Migrating data to new LVs..."
 mkdir -p "$MIGRATION_ROOT"
 for lv_name in "${MOUNT_ORDER[@]}"; do
     temp_mount_point="${MIGRATION_ROOT}${LV_PATHS[$lv_name]}"; lv_device="/dev/ocivolume/${lv_name}"
@@ -96,7 +109,7 @@ done
 run_rsync /home/ "${MIGRATION_ROOT}/home/"
 run_rsync /tmp/ "${MIGRATION_ROOT}/tmp/"
 run_rsync /opt/ "${MIGRATION_ROOT}/opt/"
-# FIX: Exclude known nested mount points to prevent wasteful data copying.
+# Exclude known mount points to prevent conflicts and wasted I/O
 run_rsync /var/ "${MIGRATION_ROOT}/var/" --exclude='/var/run' --exclude='/var/lock' --exclude='/var/oled'
 
 echo "    - Unmounting all temporary filesystems (using lazy unmount)..."
@@ -107,8 +120,8 @@ done
 rm -rf "$MIGRATION_ROOT"
 echo "    - Migration complete."
 
-# --- 3. Move Old Dirs & Create New Mount Points
-echo ">>> Phase 3.2: Renaming old directories and creating new mount points..."
+# --- 4. Move Old Dirs & Create New Mount Points
+echo ">>> Phase 3.3: Renaming old directories and creating new mount points..."
 declare -A TOP_LEVEL_DIRS
 TOP_LEVEL_DIRS["/var"]=1; TOP_LEVEL_DIRS["/home"]=1; TOP_LEVEL_DIRS["/opt"]=1; TOP_LEVEL_DIRS["/tmp"]=1
 for path in "${!TOP_LEVEL_DIRS[@]}"; do
@@ -116,42 +129,28 @@ for path in "${!TOP_LEVEL_DIRS[@]}"; do
     mkdir -p "$path"
 done
 
-# --- 4. Update /etc/fstab
-echo ">>> Phase 3.3: Updating /etc/fstab..."
+# --- 5. Update /etc/fstab
+echo ">>> Phase 3.4: Updating /etc/fstab..."
 FSTAB_BACKUP="/etc/fstab.bak.$(date +%F-%T)"
 echo "    - Backing up current fstab to ${FSTAB_BACKUP}"; cp "$FSTAB_FILE" "$FSTAB_BACKUP"
-
-echo "    - Ensuring fstab integrity and appending new entries..."
-echo "" >> "$FSTAB_FILE"
-echo "# Added by LVM migration script on $(date)" >> "$FSTAB_FILE"
+echo "" >> "$FSTAB_FILE"; echo "# Added by LVM migration script on $(date)" >> "$FSTAB_FILE"
 
 for lv_name in "${MOUNT_ORDER[@]}"; do
     mount_path="${LV_PATHS[$lv_name]}"; options="defaults,${LV_CONFIG[$lv_name]}"; device_path="/dev/ocivolume/${lv_name}"
-    if grep -qE "[\s|	]${mount_path}[\s|	]" "$FSTAB_FILE"; then
-        echo "    - An entry for ${mount_path} already exists. Skipping."
-        continue
-    fi
-    uuid=$(blkid -s UUID -o value "$device_path")
-    if [[ -z "$uuid" ]]; then echo "    - ERROR: Could not find UUID for ${device_path}. Aborting." >&2; exit 1; fi
+    if grep -qE "[\s|	]${mount_path}[\s|	]" "$FSTAB_FILE"; then continue; fi
+    uuid=$(blkid -s UUID -o value "$device_path"); if [[ -z "$uuid" ]]; then echo "ERROR" >&2; exit 1; fi
     echo -e "UUID=${uuid}\t${mount_path}\txfs\t${options}\t0 0" >> "$FSTAB_FILE"
 done
 echo "    - fstab update complete."
 
-# --- 5. Mount All & Prepare for SELinux Relabel
-echo ">>> Phase 3.4: Re-creating nested mount points & preparing for SELinux relabel..."
-# Re-create any known nested mount points that were inside the migrated directories.
+# --- 6. Mount All & Prepare for SELinux Relabel
+echo ">>> Phase 3.5: Re-creating mount points, mounting all, and preparing for SELinux relabel..."
 mkdir -p /opt/McAfee /var/log /var/log/audit /var/tmp /var/oled
-
 echo "    - Running 'mount -a' to mount all filesystems..."; mount -a
-
-echo "    - IMPORTANT: Creating /.autorelabel to trigger a full SELinux relabel on next boot."; touch /.autorelabel
+echo "    - IMPORTANT: Creating /.autorelabel for next boot."; touch /.autorelabel
 
 echo "---------------------------------------------------------------------"
 echo ">>> SUCCESS: Live migration script has completed."
 echo -e ">>> Please review 'df -h', 'mount', and '/etc/fstab' to verify correctness.\n"
-echo ">>> !!!!!!!!!!!!!!!!!!!!!!!!!!! CRITICAL !!!!!!!!!!!!!!!!!!!!!!!!!!!"
-echo ">>> AN SELINUX AUTORELABEL HAS BEEN SCHEDULED FOR THE NEXT BOOT."
-echo ">>> THE REBOOT WILL TAKE SIGNIFICANTLY LONGER THAN USUAL. "
-echo -e ">>> DO NOT INTERRUPT IT. THIS IS A NORMAL, ONE-TIME PROCESS.\n"
 echo ">>> REBOOT THE SYSTEM NOW to complete the migration."
 echo "---------------------------------------------------------------------"
