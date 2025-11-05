@@ -150,7 +150,7 @@ function create_icmp_allow_rich_rules {
                 fi
                 echo "    Adding permanent rich rule: allow ICMP type '$icmp_type' from $network (family: $family)"
                 # Use a regular 'accept' rich rule for ICMP types
-                firewall-cmd --permanent --zone="$ZONE_NAME" --add-rich-rule="rule family='$family' source address='$network' protocol value='icmp' icmp-type name='$icmp_type' accept"
+                firewall-cmd --permanent --zone="$ZONE_NAME" --add-rich-rule="rule family='$family' source address='$network' icmp-type name='$icmp_type' accept"
                 if [ $? -ne 0 ]; then
                     echo "      Warning: Failed to add ICMP allow rule for type '$icmp_type' from $network. Check the ICMP type or network address format."
                 fi
