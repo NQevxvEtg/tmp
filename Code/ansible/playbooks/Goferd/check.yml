@@ -56,6 +56,8 @@
         msg: "Found package: {{ item.results[0]['name'] }} (Version: {{ item.results[0]['version'] }})"
       loop: "{{ installed_packages.results | default([]) }}"
       when: 
-        - item is defined
+        # Check if the 'results' key exists and contains at least one package entry
+        - item.results is defined
+        - item.results | length > 0
+        # Optional: Secondary check to skip explicit failure messages
         - item.msg is not defined or 'No package matching' not in item.msg
-        - 'results' in item
