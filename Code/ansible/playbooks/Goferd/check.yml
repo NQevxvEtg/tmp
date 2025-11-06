@@ -1,0 +1,61 @@
+---
+- name: Determine if goferd service is running and associated packages are installed
+  hosts: all
+  become: yes
+  gather_facts: true
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}" 
+    ansible_remote_tmp: /var/ansible_tmp
+    # Common package names that provide the goferd agent/service on RHEL/CentOS
+    goferd_packages:
+      - katello-agent
+      - python-gofer
+      - gofer # In case a distribution packages it directly
+
+  tasks:
+    - name: Ensure target is a Red Hat based system (where goferd is common)
+      ansible.builtin.fail:
+        msg: "This playbook is designed for Red Hat / CentOS / Fedora systems."
+      when: ansible_facts['os_family'] != "RedHat"
+
+    # 1. Check Service Status
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Check if 'goferd.service' exists and is running
+      ansible.builtin.set_fact:
+        goferd_status: >
+          {{ 
+            'goferd.service' in ansible_facts.services and 
+            ansible_facts.services['goferd.service'].state == 'running' 
+          }}
+        goferd_installed: "{{ 'goferd.service' in ansible_facts.services }}"
+        goferd_state: "{{ ansible_facts.services['goferd.service'].state if 'goferd.service' in ansible_facts.services else 'Not Known' }}"
+
+    - name: Display service status
+      ansible.builtin.debug:
+        msg: |
+          Service Status:
+          - Exists (Known to Systemd): {{ goferd_installed }}
+          - Current State: {{ goferd_state }}
+          - Is Running: {{ goferd_status }}
+
+    # 2. Check Package Installation (If you need to know *how* it was installed)
+    - name: Check package status using dnf/yum (RHEL/CentOS)
+      ansible.builtin.yum:
+        list: "{{ item }}"
+      register: installed_packages
+      ignore_errors: true # Continue if a package name is not found/invalid
+      loop: "{{ goferd_packages }}"
+      when: goferd_installed is false # Only check packages if service wasn't found immediately
+
+    - name: Report which associated packages are found
+      ansible.builtin.debug:
+        msg: "Found package: {{ item.results[0]['name'] }} (Version: {{ item.results[0]['version'] }})"
+      loop: "{{ installed_packages.results | default([]) }}"
+      when: 
+        - item is defined
+        - item.msg is not defined or 'No package matching' not in item.msg
+        - 'results' in item
