@@ -1,0 +1,25 @@
+---
+- name: Update DNS settings using nmcli
+  hosts: all
+  become: true
+  gather_facts: true  # Required for ansible_play_hosts and hostvars
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+    dns_servers: "8.8.8.8 8.8.4.4"  # Predefined DNS server IPs (e.g., Google DNS)
+    search_domains: "example.com internal.local"  # Predefined search domains
+    connection_name: "ens192"  # Replace with your network connection name; use `nmcli con show` to find it
+  tasks:
+    - name: Set DNS servers
+      command: nmcli con mod {{ connection_name }} ipv4.dns "{{ dns_servers }}"
+      become: true  # Run with sudo if needed
+
+    - name: Set DNS search domains
+      command: nmcli con mod {{ connection_name }} ipv4.dns-search "{{ search_domains }}"
+      become: true  # Run with sudo if needed
+
+    # Optional: Reload the connection to apply changes without reboot
+    - name: Reload the network connection to apply DNS changes
+      command: nmcli con reload "{{ connection_name }}"
+      become: true
