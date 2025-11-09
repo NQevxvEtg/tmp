@@ -12,7 +12,7 @@
     goferd_packages:
       - katello-agent
       - python-gofer
-      - gofer # In case a distribution packages it directly
+      - gofer  # In case a distribution packages it directly
 
   tasks:
     - name: Ensure target is a Red Hat based system (where goferd is common)
@@ -20,44 +20,56 @@
         msg: "This playbook is designed for Red Hat / CentOS / Fedora systems."
       when: ansible_facts['os_family'] != "RedHat"
 
-    # 1. Check Service Status
+    # Gather all service facts to check status
     - name: Gather service facts
       ansible.builtin.service_facts:
 
-    - name: Check if 'goferd.service' exists and is running
-      ansible.builtin.set_fact:
-        goferd_status: >
-          {{ 
-            'goferd.service' in ansible_facts.services and 
-            ansible_facts.services['goferd.service'].state == 'running' 
-          }}
-        goferd_installed: "{{ 'goferd.service' in ansible_facts.services }}"
-        goferd_state: "{{ ansible_facts.services['goferd.service'].state if 'goferd.service' in ansible_facts.services else 'Not Known' }}"
+    # Gather package facts to check installation
+    - name: Gather package facts
+      ansible.builtin.package_facts:
 
-    - name: Display service status
+    - name: Set fact for service status
+      ansible.builtin.set_fact:
+        goferd_installed: "{{ 'goferd.service' in ansible_facts.services }}"
+        goferd_state: "{{ ansible_facts.services['goferd.service'].state | default('not loaded') }}"
+        goferd_running: "{{ ('goferd.service' in ansible_facts.services) and (ansible_facts.services['goferd.service'].state == 'running') }}"
+
+    # Check if any associated packages are installed
+    - name: Set fact for installed packages
+      ansible.builtin.set_fact:
+        installed_goferd_packages: "{{ goferd_packages | select('in', ansible_facts.packages) | list }}"
+        any_goferd_package_installed: "{{ goferd_packages | select('in', ansible_facts.packages) | length > 0 }}"
+
+    - name: Display service status and package information
       ansible.builtin.debug:
         msg: |
-          Service Status:
-          - Exists (Known to Systemd): {{ goferd_installed }}
+          Goferd Service Status:
+          - Service Unit Loaded: {{ goferd_installed }}
           - Current State: {{ goferd_state }}
-          - Is Running: {{ goferd_status }}
+          - Is Running: {{ goferd_running }}
 
-    # 2. Check Package Installation (If you need to know *how* it was installed)
-    - name: Check package status using dnf/yum (RHEL/CentOS)
-      ansible.builtin.yum:
-        list: "{{ item }}"
-      register: installed_packages
-      ignore_errors: true # Continue if a package name is not found/invalid
-      loop: "{{ goferd_packages }}"
-      when: goferd_installed is false # Only check packages if service wasn't found immediately
+          Installed Goferd-Related Packages:
+          - Packages Found: {{ installed_goferd_packages | join(', ') if installed_goferd_packages else 'None' }}
 
-    - name: Report which associated packages are found
+    # Optional: If service not detected, check if it's managed differently (e.g., via pid or process)
+    - name: Check if goferd process is running (as fallback)
+      ansible.builtin.command: pgrep -x goferd
+      register: goferd_process
+      ignore_errors: true
+      when: not goferd_running
+      changed_when: false
+
+    - name: Display process check result if done
       ansible.builtin.debug:
-        msg: "Found package: {{ item.results[0]['name'] }} (Version: {{ item.results[0]['version'] }})"
-      loop: "{{ installed_packages.results | default([]) }}"
+        msg: "Goferd process detected (PID: {{ goferd_process.stdout }})"
       when: 
-        # Check if the 'results' key exists and contains at least one package entry
-        - item.results is defined
-        - item.results | length > 0
-        # Optional: Secondary check to skip explicit failure messages
-        - item.msg is not defined or 'No package matching' not in item.msg
+        - not goferd_running
+        - goferd_process.stdout is defined and goferd_process.stdout != ""
+
+    - name: Fail if neither service nor process is found and no packages installed
+      ansible.builtin.fail:
+        msg: "Goferd is not found: Service not running, process not detected, and no associated packages installed."
+      when: 
+        - not any_goferd_package_installed
+        - not goferd_running
+        - goferd_process is failed or goferd_process.stdout is undefined or goferd_process.stdout == ""
