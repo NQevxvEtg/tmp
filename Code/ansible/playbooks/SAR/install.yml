@@ -28,7 +28,7 @@
       ignore_errors: true
       changed_when: false
 
-    - name: Archive existing sysstat data
+    - name: Archive existing sysstat data with preserved permissions
       block:
         - name: Create archive directory for existing data
           file:
@@ -39,11 +39,11 @@
             mode: '0755'
           when: existing_files.stdout | length > 0
 
-        - name: Copy existing sysstat files to archive
+        - name: Copy existing sysstat files to archive with cp -pr
           shell: |
             for file in {{ existing_files.stdout_lines | join(' ') }}; do
               if [[ -f "$file" ]]; then
-                cp "$file" "/var/log/sa/archive/pre-setup-{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}/$(basename $file)_archived_{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}"
+                cp -pr "$file" "/var/log/sa/archive/pre-setup-{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}/$(basename $file)_archived_{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}"
               fi
             done
           when: existing_files.stdout | length > 0
@@ -64,7 +64,7 @@
       loop:
         - { regex: 'ENABLED', line: 'ENABLED="true"' }
         - { regex: 'HISTORY', line: 'HISTORY=180' }  # 6 months = 180 days
-        - { regex: 'SADIR', line: 'SADIR="/var/log/sa"' }  # Use /var/log/sa, not /var/log/sysstat
+        - { regex: 'SADIR', line: 'SADIR="/var/log/sa"' }
       notify: restart sysstat
 
     - name: Enable and start sysstat timer
@@ -88,10 +88,10 @@
               ARCHIVE_DIR="/var/log/sa/archive/${YEAR}-${MONTH}"
               mkdir -p "$ARCHIVE_DIR"
               
-              # Copy current month's files with timestamp
+              # Copy current month's files with timestamp and preserved permissions
               for file in /var/log/sa/sa* /var/log/sa/sar*; do
                   if [[ -f "$file" ]]; then
-                      cp "$file" "${ARCHIVE_DIR}/$(basename $file)_$(date +%Y%m%d)"
+                      cp -pr "$file" "${ARCHIVE_DIR}/$(basename $file)_$(date +%Y%m%d)"
                   fi
               done
           fi
@@ -126,6 +126,7 @@
           Archive setup:
           - Archive script: /usr/local/bin/archive-sysstat.sh
           - Monthly archiving: Enabled (runs daily checks, archives at month end)
+          - Copy method: cp -pr (preserves permissions and timestamps)
           {% if existing_files.stdout | length > 0 %}
           - Existing data: Archived to /var/log/sa/archive/pre-setup-{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}
           {% else %}
@@ -133,13 +134,13 @@
           {% endif %}
 
     - name: Show current sysstat files in /var/log/sa
-      shell: ls -la /var/log/sa/ 2>/dev/null || echo "No files in /var/log/sa"
+      shell: ls -la /var/log/sa/archive/ 2>/dev/null || echo "No archive directory yet"
       register: log_files
       changed_when: false
       delegate_to: localhost
       run_once: true
 
-    - name: Display log files
+    - name: Display archived files with permissions
       debug:
         var: log_files.stdout_lines
 
