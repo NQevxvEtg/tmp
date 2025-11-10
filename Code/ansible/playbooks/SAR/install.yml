@@ -1,5 +1,5 @@
 ---
-- name: Setup sysstat (sar) for 30-day retention
+- name: Setup sysstat (sar) for 6-month retention
   hosts: all
   become: yes
   gather_facts: true
@@ -16,24 +16,133 @@
 
     - name: Create sysstat log directory
       file:
-        path: /var/log/sa
+        path: /var/log/sysstat
         state: directory
         owner: root
         group: root
         mode: '0755'
 
-    - name: Configure sysstat
+    - name: Check for existing sysstat files
+      shell: find /var/log/sysstat -name "sa*" -o -name "sar*" 2>/dev/null | head -20
+      register: existing_files
+      ignore_errors: true
+      changed_when: false
+
+    - name: Archive existing sysstat data
+      block:
+        - name: Create archive directory for existing data
+          file:
+            path: /var/log/sysstat/archive/pre-setup-{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          when: existing_files.stdout | length > 0
+
+        - name: Copy existing sysstat files to archive
+          shell: |
+            for file in {{ existing_files.stdout_lines | join(' ') }}; do
+              if [[ -f "$file" ]]; then
+                cp "$file" "/var/log/sysstat/archive/pre-setup-{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}/$(basename $file)_archived_{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}"
+              fi
+            done
+          when: existing_files.stdout | length > 0
+
+        - name: Show archived files
+          debug:
+            msg: |
+              Archived {{ existing_files.stdout_lines | length }} existing sysstat files to:
+              /var/log/sysstat/archive/pre-setup-{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}/
+      when: existing_files.stdout | length > 0
+
+    - name: Configure sysstat for 6-month retention
       lineinfile:
         path: /etc/default/sysstat
-        line: "{{ item }}"
+        regexp: '^{{ item.regex }}'
+        line: '{{ item.line }}'
         create: true
       loop:
-        - "ENABLED=\"true\""
-        - "HISTORY=30"
-        - "SADIR=\"/var/log/sa\""
+        - { regex: 'ENABLED', line: 'ENABLED="true"' }
+        - { regex: 'HISTORY', line: 'HISTORY=180' }  # 6 months = 180 days
+        - { regex: 'SADIR', line: 'SADIR="/var/log/sysstat"' }
+      notify: restart sysstat
 
-    - name: Enable and start sysstat service
+    - name: Enable and start sysstat timer
       systemd:
-        name: sysstat
+        name: sysstat-summary.timer
         enabled: true
         state: started
+
+    - name: Create monthly archive script for ongoing retention
+      copy:
+        dest: /usr/local/bin/archive-sysstat.sh
+        content: |
+          #!/bin/bash
+          # Archive sysstat data monthly to prevent overwrites
+          YEAR=$(date +%Y)
+          MONTH=$(date +%m)
+          DAY=$(date +%d)
+          
+          # Archive at the end of the month to prevent data loss
+          if [[ $DAY -ge 28 ]]; then
+              ARCHIVE_DIR="/var/log/sysstat/archive/${YEAR}-${MONTH}"
+              mkdir -p "$ARCHIVE_DIR"
+              
+              # Copy current month's files with timestamp
+              for file in /var/log/sysstat/sa* /var/log/sysstat/sar*; do
+                  if [[ -f "$file" ]]; then
+                      cp "$file" "${ARCHIVE_DIR}/$(basename $file)_$(date +%Y%m%d)"
+                  fi
+              done
+          fi
+        mode: '0755'
+
+    - name: Schedule monthly archiving
+      cron:
+        name: "Archive sysstat data monthly"
+        minute: "0"
+        hour: "23"
+        day: "28-31"
+        user: "root"
+        job: "/usr/local/bin/archive-sysstat.sh"
+        disabled: no
+
+    - name: Verify sysstat is working
+      shell: sar -u 1 1
+      register: sar_test
+      ignore_errors: true
+      changed_when: false
+
+    - name: Display setup summary
+      debug:
+        msg: |
+          sysstat installation completed with 6-month retention.
+          
+          Configuration:
+          - Log directory: /var/log/sysstat
+          - History setting: 180 days (6 months)
+          - Timer: sysstat-summary.timer ({{ 'Active' if sar_test.rc == 0 else 'Check manually' }})
+          
+          Archive setup:
+          - Archive script: /usr/local/bin/archive-sysstat.sh
+          - Monthly archiving: Enabled (runs daily checks, archives at month end)
+          {% if existing_files.stdout | length > 0 %}
+          - Existing data: Archived to pre-setup-{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}
+          {% endif %}
+
+    - name: Show current sysstat files
+      shell: ls -la /var/log/sysstat/ 2>/dev/null || echo "No files yet - data collection starts now"
+      register: log_files
+      changed_when: false
+      delegate_to: localhost
+      run_once: true
+
+    - name: Display log files
+      debug:
+        var: log_files.stdout_lines
+
+  handlers:
+    - name: restart sysstat
+      systemd:
+        name: sysstat-summary.timer
+        state: restarted
