@@ -2,6 +2,12 @@
 - name: Install Dynatrace SELinux Policies
   hosts: all
   become: true
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+
+
   tasks:
     - name: Install all .pp files from Dynatrace
       semodule:
