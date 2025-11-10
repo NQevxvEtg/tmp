@@ -1,0 +1,39 @@
+---
+- name: Setup sysstat (sar) for 30-day retention
+  hosts: all
+  become: yes
+  gather_facts: true
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - name: Install sysstat package
+      package:
+        name: sysstat
+        state: present
+
+    - name: Create sysstat log directory
+      file:
+        path: /var/log/sa
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure sysstat
+      lineinfile:
+        path: /etc/default/sysstat
+        line: "{{ item }}"
+        create: true
+      loop:
+        - "ENABLED=\"true\""
+        - "HISTORY=30"
+        - "SADIR=\"/var/log/sa\""
+
+    - name: Enable and start sysstat service
+      systemd:
+        name: sysstat
+        enabled: true
+        state: started
