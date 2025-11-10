@@ -1,0 +1,11 @@
+---
+- name: Install Dynatrace SELinux Policies
+  hosts: all
+  become: true
+  tasks:
+    - name: Install all .pp files from Dynatrace
+      semodule:
+        name: "{{ item }}"
+        state: present
+      with_fileglob:
+        - /opt/dynatrace/oneagent/agent/SELinuxPolicy/*.pp
