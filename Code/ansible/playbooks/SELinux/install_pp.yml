@@ -23,9 +23,9 @@
           fi
         done
       args:
-        warn: false
+        chdir: "{{ ansible_remote_tmp }}"
       register: install_result
 
     - name: Display installation results
       debug:
-        msg: "{{ install_result.stdout }}"
+        msg: "{{ install_result.stdout | default('No output') }}"
