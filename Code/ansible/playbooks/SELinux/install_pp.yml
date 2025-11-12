@@ -6,10 +6,20 @@
     - ../../vaults/vbox_vault.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
+    selinux_policy_dir: "/opt/dynatrace/oneagent/agent/SELinuxPolicy"
 
   tasks:
-    - name: Install all .pp files from Dynatrace
+    - name: Find all .pp files in Dynatrace SELinux directory
+      find:
+        paths: "{{ selinux_policy_dir }}"
+        patterns: "*.pp"
+        file_type: file
+      register: pp_files
+
+    - name: Install SELinux policy files
       semodule:
-        name: "{{ item }}"
+        name: "{{ item.path }}"
         state: present
-      with_fileglob: "/opt/dynatrace/oneagent/agent/SELinuxPolicy/*.pp"
+      loop: "{{ pp_files.files }}"
+      loop_control:
+        label: "Installing policy: {{ item.path }}"
