@@ -5,7 +5,7 @@
   vars_files:
     - ../../vaults/vbox_vault.yml
   vars:
-    ansible_remote_tmp: /var/ansible_tmp
+    ansible_remote_tmp: /var/ansible_tmp  # This var is defined but not used now
     selinux_policy_dir: "/opt/dynatrace/oneagent/agent/SELinuxPolicy"
 
   tasks:
@@ -22,8 +22,6 @@
             fi
           fi
         done
-      args:
-        chdir: "{{ ansible_remote_tmp }}"
       register: install_result
 
     - name: Display installation results
