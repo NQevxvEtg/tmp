@@ -6,19 +6,26 @@
     - ../../vaults/vbox_vault.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
+    selinux_policy_dir: "/opt/dynatrace/oneagent/agent/SELinuxPolicy"
 
   tasks:
-    - name: Find all .pp files in Dynatrace SELinux directory
-      ansible.builtin.find:
-        paths: "/opt/dynatrace/oneagent/agent/SELinuxPolicy"
-        patterns: "*.pp"
-        file_type: file
-      register: pp_files
+    - name: Find and install all .pp files from Dynatrace
+      shell: |
+        for policy in {{ selinux_policy_dir }}/*.pp; do
+          if [ -f "$policy" ]; then
+            policy_name=$(basename "$policy" .pp)
+            if ! semodule -l | grep -q "^${policy_name} "; then
+              echo "Installing $policy"
+              semodule -i "$policy"
+            else
+              echo "Policy $policy_name already installed"
+            fi
+          fi
+        done
+      args:
+        warn: false
+      register: install_result
 
-    - name: Install SELinux policy files
-      community.general.semodule:
-        name: "{{ item.path }}"
-        state: present
-      loop: "{{ pp_files.files }}"
-      loop_control:
-        label: "Installing policy: {{ item.path }}"
+    - name: Display installation results
+      debug:
+        msg: "{{ install_result.stdout }}"
