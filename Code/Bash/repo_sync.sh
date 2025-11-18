@@ -9,8 +9,8 @@ REPOS=(
     "ol9_baseos_latest"
     "ol9_appstream"
     "ol9_uek_latest"
-    "ol8_baseos_latest"     # These will work even if enabled=0 in repo files
-    "ol8_appstream"         # because we use --enablerepo below
+    "ol8_baseos_latest"
+    "ol8_appstream"
 )
 
 # 3. Start the Loop
