@@ -1,0 +1,41 @@
+---
+- name: Uninstall Dynatrace OneAgent and remove installation directory
+  hosts: all
+  become: yes  # This is necessary to run the uninstall script and delete files in /opt
+
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+
+    dynatrace_install_path: /opt/dynatrace
+    oneagent_uninstall_script: "{{ dynatrace_install_path }}/oneagent/agent/uninstall.sh"
+
+  tasks:
+    - name: Check if Dynatrace uninstall script exists
+      stat:
+        path: "{{ oneagent_uninstall_script }}"
+      register: uninstall_script_status
+
+    - name: Execute Dynatrace OneAgent uninstall script
+      ansible.builtin.command: "{{ oneagent_uninstall_script }}"
+      # Execute only if the script was found in the previous step
+      when: uninstall_script_status.stat.exists
+      register: uninstall_output
+      changed_when: uninstall_output.rc == 0
+      # Ignore errors just in case the uninstall script exits with a non-zero code even if successful
+      # or if the agent is already partially removed.
+      ignore_errors: true
+
+    - name: Check if the main Dynatrace directory exists
+      stat:
+        path: "{{ dynatrace_install_path }}"
+      register: dynatrace_dir_status
+
+    - name: Remove the entire Dynatrace installation directory
+      ansible.builtin.file:
+        path: "{{ dynatrace_install_path }}"
+        state: absent # 'absent' ensures the path is removed
+      when: dynatrace_dir_status.stat.exists
+      tags:
+        - cleanup
