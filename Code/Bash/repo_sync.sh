@@ -33,7 +33,7 @@ for REPO_ID in "${REPOS[@]}"; do
     dnf reposync \
         --enablerepo="$REPO_ID" \
         --repoid="$REPO_ID" \
-        --destdir="$MIRROR_DIR" \
+        --download-path="$MIRROR_DIR" \
         --newest-only \
         --download-metadata \
         --delete
