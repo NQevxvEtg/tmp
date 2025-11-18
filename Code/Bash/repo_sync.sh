@@ -36,6 +36,11 @@ for REPO_ID in "${REPOS[@]}"; do
         --download-metadata \
         --delete
 
+        # for version 8 you need these options
+        # --releasever=8 \
+        # --setopt=module_platform_id=platform:el8 \
+        # --setopt=overrides_platform_id=platform:el8
+
     if [ $? -eq 0 ]; then
         echo "Basic sync for $REPO_ID - SUCCESS"
     else
