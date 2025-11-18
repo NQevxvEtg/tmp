@@ -28,10 +28,8 @@ for REPO_ID in "${REPOS[@]}"; do
     # --delete: Remove local packages that no longer exist upstream
     # --newest-only: Don't download old versions (saves huge disk space)
     # --download-metadata: Required for the client to see repodata
-    # --enablerepo: Temporarily enables the repo if it is currently disabled
-    
+
     dnf reposync \
-        --enablerepo="$REPO_ID" \
         --repoid="$REPO_ID" \
         --download-path="$MIRROR_DIR" \
         --newest-only \
