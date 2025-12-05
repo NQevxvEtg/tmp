@@ -1,0 +1,33 @@
+---
+- name: Manage ld.so.preload configuration
+  hosts: all
+  become: true
+  gather_facts: true  # Required for ansible_play_hosts and hostvars
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    ansible_remote_tmp: /var/ansible_tmp
+    problematic_library: "/lib64/example.so"
+
+  tasks:
+    - name: Ensure the problematic library is ABSENT from ld.so.preload
+      ansible.builtin.lineinfile:
+        path: /etc/ld.so.preload
+        state: absent
+        # The line to be removed, using the variable defined above.
+        # Ansible automatically handles special characters like '/' in the path.
+        regexp: "^{{ problematic_library | regex_escape }}$"
+        create: no # Do not create the file if it doesn't exist
+        backup: yes # Create a backup of the original file (e.g., ld.so.preload.bak)
+      register: preload_cleanup
+
+    - name: Report cleanup status
+      ansible.builtin.debug:
+        msg: "The entry '{{ problematic_library }}' was removed from /etc/ld.so.preload. A backup was created."
+      when: preload_cleanup.changed
+
+    - name: Report no change
+      ansible.builtin.debug:
+        msg: "The entry '{{ problematic_library }}' was already absent or the file does not exist."
+      when: not preload_cleanup.changed
