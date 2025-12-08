@@ -1,0 +1,33 @@
+---
+- name: Patch and Reboot (Robust Shell)
+  hosts: all
+  become: yes
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    ansible_remote_tmp: "/var/ansible_tmp"
+
+  tasks:
+    # 1. UPDATE: Use Ansible's async to 'wait' safely
+    # We add 'timeout' to kill dnf if it hangs on a prompt (fixing your polling issue)
+    - name: Run DNF update
+      ansible.builtin.shell: "timeout 3500 dnf update -y"
+      async: 3600    # Run in background on the server
+      poll: 30       # Check every 30s to see if it's done
+      register: update_result
+      ignore_errors: true
+
+    # 2. CHECK: Did it actually finish?
+    - name: Fail if update failed or timed out
+      ansible.builtin.fail:
+        msg: "Update failed or timed out. Stdout: {{ update_result.stdout }}"
+      when: update_result.rc != 0
+
+    # 3. REBOOT: Fire and Forget
+    - name: Reboot (Fire and Forget)
+      ansible.builtin.shell: "nohup sh -c 'sleep 2 && shutdown -r now' &"
+      async: 1
+      poll: 0        # Disconnect immediately
+      ignore_errors: true
+      when: update_result.rc == 0

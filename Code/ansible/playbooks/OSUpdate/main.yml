@@ -1,210 +1,26 @@
-- name: Minimalist System Patching (Oracle DB/Middleware Mindful)
-  ignore_unreachable: yes # Continue playbook even if some hosts are unreachable
+---
+- name: Patch and Reboot (Module Based)
   hosts: all
-  become: yes # Run tasks with root privileges
-
+  become: yes
+  vars_files:
+    - ../../vaults/vbox_vault.yml
   vars:
-    excluded_packages:
-      - oracle-database-server-*
-      - oracle-client-*
-      - weblogic-server-*
-      - tomcat-*
-      - jboss-eap-*
-      - java-1.*.0-openjdk*
-      # Ensure this list is comprehensive for your environment.
-
-    # Define the path for the centralized patch log on the Ansible control machine
-    # This will now create a JSON file per host in a structured path.
-    ansible_remote_tmp: /var/ansible_tmp
-    patch_log_dir: "{{ playbook_dir_path }}/logs/"
-    patch_log_file_json: "{{ patch_log_dir }}/patch_status_{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic }}.json"
+    ansible_become_password: "{{ remote_host_become_pass }}"
+    ansible_remote_tmp: "/var/ansible_tmp"
 
   tasks:
-    # --- Capture playbook directory path for delegated tasks ---
-    # Use lookup('env', 'PWD') to reliably get the current working directory,
-    # which should be the playbook's root directory when executed.
-    - name: Capture playbook directory path for localhost
-      ansible.builtin.set_fact:
-        playbook_dir_path: "{{ lookup('env', 'PWD') }}"
-      delegate_to: localhost
-      run_once: true
-      vars:
-        ansible_become_password: "{{ controller_become_password }}"
+    - name: Upgrade all packages (Async)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+      async: 3600  # 1 hour max runtime
+      poll: 30     # Check every 30 seconds
+      register: dnf_result
 
-    # --- PRE-PATCH OBSERVATION & CAPABILITY PROBING ---
-    - name: Ensure DNF is set to 'prompt=never' for non-interactive updates
-      ansible.builtin.lineinfile:
-        path: /etc/dnf/dnf.conf
-        regexp: '^prompt='
-        line: 'prompt=never'
-        state: present
-        create: yes
-      when: ansible_distribution in ['RedHat', 'OracleLinux'] and ansible_distribution_major_version in ['8', '9']
-
-    - name: Capture installed packages before patching (on remote host)
-      ansible.builtin.shell: "dnf list installed > {{ ansible_remote_tmp }}/dnf_installed_packages_before_patch.log"
-      register: dnf_list_before_on_remote
-      changed_when: false
-      args:
-        creates: "{{ ansible_remote_tmp }}/dnf_installed_packages_before_patch.log"
-
-    - name: Fetch pre-patch package list log to controller
-      ansible.builtin.fetch:
-        src: "{{ ansible_remote_tmp }}/dnf_installed_packages_before_patch.log"
-        dest: "{{ ansible_remote_tmp }}/dnf_installed_packages_before_patch_{{ inventory_hostname }}.log"
-        flat: yes
-      changed_when: false
-
-    - name: Check current status of potential Oracle/Middleware services
-      ansible.builtin.shell: |
-        systemctl list-units --type=service --state=running --no-pager | grep -E "oracle|weblogic|tomcat|jboss|httpd" || true
-      register: running_services_before
-      changed_when: false
-
-    - name: Check if 'lsnrctl' command is present for Oracle Listener checks
-      ansible.builtin.command: command -v lsnrctl
-      register: lsnrctl_present_check
-      changed_when: false
-      failed_when: false # Do not fail if command not found
-
-    - name: Check Oracle Listener status (if lsnrctl is present)
-      ansible.builtin.shell: |
-        if {{ lsnrctl_present_check.rc == 0 }}; then
-          lsnrctl status || true
-        else
-          echo "lsnrctl command not found. Skipping Oracle Listener check."
-        fi
-      register: oracle_listener_status_before
-      changed_when: false
-      # Only run if Oracle services might be present or lsnrctl is explicitly found
-      when: running_services_before.stdout | default('') is search('oracle') or lsnrctl_present_check.rc == 0
-
-    - name: Check if 'needs-restarting' utility is present
-      ansible.builtin.stat:
-        path: /usr/bin/needs-restarting # Common path for this utility
-      register: needs_restarting_present
-      changed_when: false
-
-    # --- PATCH APPLICATION (Initiate async DNF, poll: 0) ---
-    # This initiates the DNF update as an asynchronous background job on the remote host.
-    # poll: 0 means Ansible immediately returns control to the controller after starting the job.
-    - name: Apply security and bugfix updates via DNF (synchronous shell)
-      ansible.builtin.shell: |
-        dnf -y update --security --bugfix --exclude={{ excluded_packages | join(',') }}
-      register: dnf_patch_initiate_result # Register the result to get the async job ID and path
-      async: 1800 # Max 30 minutes for the operation
-      poll: 0      # Crucial: Do not poll here, just start the job and return control
-
-
-    # --- Explicit Async Poll Task ---
-    # This task explicitly calls the async_status action module to poll the status
-    # of the previously initiated DNF job.
-    # It will retry until the job is 'finished' or the retries/timeout are exhausted.
-    - name: Poll for DNF update completion
-      ansible.builtin.async_status:
-        jid: "{{ dnf_patch_initiate_result.ansible_job_id }}" # Use the job ID from the previous task
-        mode: status
-      register: dnf_patch_result # Register the final result of the async operation
-      until: dnf_patch_result.finished # Loop until the job is finished
-      delay: 15 # Check status every 15 seconds
-      retries: 120 # Retry 120 times = 30 minutes (15s * 120 = 1800s)
-
-    # --- POST-PATCH OBSERVATION ---
-    - name: Capture installed packages after patching (on remote host)
-      ansible.builtin.shell: "dnf list installed > {{ ansible_remote_tmp }}/dnf_installed_packages_after_patch.log"
-      register: dnf_list_after_on_remote
-      changed_when: false
-      args:
-        creates: "{{ ansible_remote_tmp }}/dnf_installed_packages_after_patch.log"
-
-    - name: Fetch post-patch package list log to controller
-      ansible.builtin.fetch:
-        src: "{{ ansible_remote_tmp }}/dnf_installed_packages_after_patch.log"
-        dest: "{{ ansible_remote_tmp }}/dnf_installed_packages_after_patch_{{ inventory_hostname }}.log"
-        flat: yes
-      changed_when: false
-
-    - name: Check for packages that require a system reboot
-      ansible.builtin.shell: needs-restarting -r || true
-      register: reboot_required_packages
-      changed_when: false
-      ignore_errors: true # Ignore if needs-restarting is not found, handled by stat check later
-      when: needs_restarting_present.stat.exists # Only run if utility is present
-
-    - name: Check for services that need to be restarted (due to updated libraries)
-      ansible.builtin.shell: needs-restarting -s || true
-      register: services_to_restart
-      changed_when: false
-      ignore_errors: true # Ignore if needs-restarting is not found, handled by stat check later
-      when: needs_restarting_present.stat.exists # Only run if utility is present
-
-    - name: Check current status of potential Oracle/Middleware services post-patch
-      ansible.builtin.shell: |
-        systemctl list-units --type=service --state=running --no-pager | grep -E "oracle|weblogic|tomcat|jboss|httpd" || true
-      register: running_services_after
-      changed_when: false
-
-    - name: Check Oracle Listener status after patching
-      ansible.builtin.shell: |
-        if {{ lsnrctl_present_check.rc == 0 }}; then
-          lsnrctl status || true
-        else
-          echo "lsnrctl command not found. Skipping Oracle Listener check."
-        fi
-      register: oracle_listener_status_after
-      changed_when: false
-      # Only run if Oracle services might be present or lsnrctl is explicitly found
-      when: running_services_after.stdout | default('') is search('oracle') or lsnrctl_present_check.rc == 0
-
-    # --- CENTRALIZED PATCH LOGGING (JSON Output) ---
-    - name: Create centralized patch status JSON file
-      ansible.builtin.copy:
-        dest: "{{ patch_log_file_json }}" # Direct path to the JSON file
-        content: "{{ patch_status_data | to_nice_json(indent=2) }}" # Convert the dictionary to pretty-printed JSON
-        mode: '0644'
-      delegate_to: localhost
-      run_once: false # This task runs for each host in the play
-      changed_when: true
-      vars:
-        ansible_become_password: "{{ controller_become_password }}"
-        patch_status_data:
-          hostname: "{{ inventory_hostname }}"
-          datetime: "{{ ansible_date_time.iso8601 }}"
-          unreachable: "{{ 'UNREACHABLE' if hostvars[inventory_hostname].ansible_unreachable | default(false) else 'OK' }}"
-          patch_details:
-            dnf_changed: "{{ dnf_patch_result.changed | default(false) }}"
-            dnf_output: "{{ dnf_patch_result.results | default([]) }}" # Raw results from dnf operation
-          reboot_check:
-            tool_present: "{{ needs_restarting_present.stat.exists }}"
-            reboot_required: >-
-              {% if needs_restarting_present.stat.exists %}
-                {{ 'YES' if reboot_required_packages.stdout | default('') | length > 0 else 'NO' }}
-              {% else %}
-                N/A (Tool Not Present)
-              {% endif %}
-            reboot_packages: "{{ reboot_required_packages.stdout_lines | default([]) }}"
-          service_restart_check:
-            tool_present: "{{ needs_restarting_present.stat.exists }}"
-            services_to_restart_required: >-
-              {% if needs_restarting_present.stat.exists %}
-                {{ 'YES' if services_to_restart.stdout_lines | default([]) | length > 0 else 'NO' }}
-              {% else %}
-                N/A (Tool Not Present)
-              {% endif %}
-            services_to_restart_list: "{{ services_to_restart.stdout_lines | default([]) }}"
-          oracle_middleware_status:
-            lsnrctl_present: "{{ lsnrctl_present_check.rc == 0 }}"
-            listener_status_before: >-
-              {% if lsnrctl_present_check.rc == 0 %}
-                {{ oracle_listener_status_before.stdout | default('N/A') | replace('\n', ' ') | truncate(200, True, '...', 0) }}
-              {% else %}
-                LSNRCTL_NOT_FOUND
-              {% endif %}
-            listener_status_after: >-
-              {% if lsnrctl_present_check.rc == 0 %}
-                {{ oracle_listener_status_after.stdout | default('N/A') | replace('\n', ' ') | truncate(200, True, '...', 0) }}
-              {% else %}
-                LSNRCTL_NOT_FOUND
-              {% endif %}
-            running_services_before_patch: "{{ running_services_before.stdout_lines | default([]) }}"
-            running_services_after_patch: "{{ running_services_after.stdout_lines | default([]) }}"
+    - name: Reboot (Fire and Forget)
+      # sleep 2 gives Ansible time to close the SSH connection cleanly
+      ansible.builtin.shell: "sleep 2 && shutdown -r now"
+      async: 1     # Run for max 1 second
+      poll: 0      # Fire and forget immediately
+      ignore_errors: true
+      when: dnf_result.changed
