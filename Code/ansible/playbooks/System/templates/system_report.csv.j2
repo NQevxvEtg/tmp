@@ -2,6 +2,15 @@ Hostname,CPUs,Load 1m,Load 5m,Load 15m,RAM Total (MB),RAM Free (MB),RAM Used %,S
 {% for host in groups['all'] -%}
 {% set h = hostvars[host] -%}
 {% if h['ansible_memtotal_mb'] is defined -%}
-{{ host }},{{ h['ansible_processor_vcpus'] | default(0) }},{{ h['ansible_loadavg']['1m'] | default(0) }},{{ h['ansible_loadavg']['5m'] | default(0) }},{{ h['ansible_loadavg']['15m'] | default(0) }},{{ h['ansible_memtotal_mb'] }},{{ h['ansible_memfree_mb'] }},{{ (100 - (h['ansible_memfree_mb'] / h['ansible_memtotal_mb'] * 100)) | round(2) }}%,{{ h['ansible_swaptotal_mb'] }},{{ h['ansible_swapfree_mb'] }},{% if h['ansible_swaptotal_mb']|int > 0 %}{{ (100 - (h['ansible_swapfree_mb'] / h['ansible_swaptotal_mb'] * 100)) | round(2) }}%{% else %}0%{% endif }}{{ '\n' }}
+{# --- Calculate RAM Percentage --- #}
+{% set ram_used = (100 - (h['ansible_memfree_mb'] / h['ansible_memtotal_mb'] * 100)) | round(2) -%}
+{# --- Calculate Swap Percentage --- #}
+{% if h['ansible_swaptotal_mb']|int > 0 -%}
+  {% set swap_used = (100 - (h['ansible_swapfree_mb'] / h['ansible_swaptotal_mb'] * 100)) | round(2) -%}
+{% else -%}
+  {% set swap_used = 0 -%}
+{% endif -%}
+{# --- Print the Row (Note the explicit newline at the end) --- #}
+{{ host }},{{ h['ansible_processor_vcpus']|default(0) }},{{ h['ansible_loadavg']['1m']|default(0) }},{{ h['ansible_loadavg']['5m']|default(0) }},{{ h['ansible_loadavg']['15m']|default(0) }},{{ h['ansible_memtotal_mb'] }},{{ h['ansible_memfree_mb'] }},{{ ram_used }}%,{{ h['ansible_swaptotal_mb'] }},{{ h['ansible_swapfree_mb'] }},{{ swap_used }}%{{ '\n' }}
 {%- endif -%}
 {% endfor %}
