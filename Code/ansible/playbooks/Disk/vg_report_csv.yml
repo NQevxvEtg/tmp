@@ -1,0 +1,52 @@
+---
+- name: Collect VG Extents
+  hosts: all
+  become: true
+  gather_facts: no
+  ignore_errors: yes
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - name: Run vgs to get extent counts
+      ansible.builtin.command: >
+        vgs --noheadings --separator ':' --units b -o vg_name,vg_extent_count,vg_free_count
+      register: vgs_output
+      changed_when: false
+
+    - name: Parse VG data
+      ansible.builtin.set_fact:
+        vg_data: "{{ vg_data | default([]) + [{ 'name': item.split(':')[0] | trim, 'total': item.split(':')[1] | trim, 'free': item.split(':')[2] | trim }] }}"
+      loop: "{{ vgs_output.stdout_lines }}"
+      when: vgs_output.rc == 0
+
+- name: Generate CSV Report
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+    output_file: "{{ playbook_dir }}/../../files/vg_report.csv"
+
+  tasks:
+    - name: Get primary group of the playbook runner
+      delegate_to: localhost
+      ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
+      register: primary_group
+      changed_when: false
+
+    - name: Create CSV report from template
+      ansible.builtin.template:
+        src: templates/vg_report.csv.j2
+        dest: "{{ output_file }}"
+        owner: "{{ lookup('env', 'USER') }}"
+        group: "{{ primary_group.stdout }}"
+        mode: '0644'
+      run_once: true
+
+    - name: Display report location
+      ansible.builtin.debug:
+        msg: "CSV Report generated at {{ output_file }}"

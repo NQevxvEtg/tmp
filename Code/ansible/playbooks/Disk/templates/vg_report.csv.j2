@@ -1,0 +1,8 @@
+Hostname,VG Name,Total Extents,Free Extents,Free Percent
+{% for host in groups['all'] -%}
+{% if hostvars[host]['vg_data'] is defined -%}
+{% for vg in hostvars[host]['vg_data'] -%}
+{{ host }},{{ vg.name }},{{ vg.total }},{{ vg.free }},{% if vg.total|int > 0 %}{{ ((vg.free|int / vg.total|int) * 100) | round(2) }}%{% else %}N/A{% endif %}
+{% endfor -%}
+{% endif -%}
+{% endfor %}

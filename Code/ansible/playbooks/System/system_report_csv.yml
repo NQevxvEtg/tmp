@@ -1,0 +1,43 @@
+---
+- name: Collect System Facts
+  hosts: all
+  become: true
+  gather_facts: yes
+  ignore_errors: yes
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+
+  tasks:
+    - name: Ping host to verify connectivity
+      ansible.builtin.ping:
+
+- name: Generate CSV Report
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+    output_file: "{{ playbook_dir }}/../../files/system_report.csv"
+
+  tasks:
+    - name: Get primary group of the playbook runner
+      delegate_to: localhost
+      ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
+      register: primary_group
+      changed_when: false
+
+    - name: Create CSV report from template
+      ansible.builtin.template:
+        src: templates/system_report.csv.j2
+        dest: "{{ output_file }}"
+        owner: "{{ lookup('env', 'USER') }}"
+        group: "{{ primary_group.stdout }}"
+        mode: '0644'
+      run_once: true
+
+    - name: Display report location
+      ansible.builtin.debug:
+        msg: "CSV Report generated at {{ output_file }}"
