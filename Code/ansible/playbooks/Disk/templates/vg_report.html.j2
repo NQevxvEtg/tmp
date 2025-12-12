@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #dddddd; text-align: left; padding: 8px; }
+    th { background-color: #f2f2f2; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    .critical { color: red; font-weight: bold; }
+</style>
+<title>LVM Extent Report</title>
+</head>
+<body>
+
+<h2>LVM Free Extents Report</h2>
+<p>Generated on: {{ ansible_date_time.date }} {{ ansible_date_time.time }}</p>
+
+<table>
+  <tr>
+    <th>Hostname</th>
+    <th>VG Name</th>
+    <th>Total Extents</th>
+    <th>Free Extents</th>
+    <th>Free %</th>
+  </tr>
+  {% for host in groups['all'] %}
+    {% if hostvars[host]['vg_data'] is defined %}
+      {% for vg in hostvars[host]['vg_data'] %}
+      <tr>
+        <td>{{ host }}</td>
+        <td>{{ vg.name }}</td>
+        <td>{{ vg.total }}</td>
+        <td>{{ vg.free }}</td>
+        <td>
+            {% if vg.total|int > 0 %}
+                {% set pct = (vg.free|int / vg.total|int * 100) | round(2) %}
+                <span class="{% if pct < 10 %}critical{% endif %}">{{ pct }}%</span>
+            {% else %}
+                N/A
+            {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% endif %}
+  {% endfor %}
+</table>
+
+</body>
+</html>
