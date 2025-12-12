@@ -1,27 +1,17 @@
 ---
-- name: Collect VG Extents
+- name: Collect System Facts
   hosts: all
   become: true
-  gather_facts: no
-  ignore_errors: yes  # Continue even if a host is down
+  gather_facts: yes  # Must be YES to get memory and cpu facts
+  ignore_errors: yes
   vars_files:
     - ../../vaults/vbox_vault.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
 
   tasks:
-    - name: Run vgs to get extent counts
-      # Returns: VG_NAME:TOTAL_EXTENTS:FREE_EXTENTS
-      ansible.builtin.command: >
-        vgs --noheadings --separator ':' --units b -o vg_name,vg_extent_count,vg_free_count
-      register: vgs_output
-      changed_when: false
-
-    - name: Parse VG data
-      ansible.builtin.set_fact:
-        vg_data: "{{ vg_data | default([]) + [{ 'name': item.split(':')[0] | trim, 'total': item.split(':')[1] | trim, 'free': item.split(':')[2] | trim }] }}"
-      loop: "{{ vgs_output.stdout_lines }}"
-      when: vgs_output.rc == 0
+    - name: Ping host to verify connectivity
+      ansible.builtin.ping:
 
 - name: Generate HTML Report
   hosts: localhost
@@ -30,7 +20,7 @@
     - ../../vaults/vbox_vault.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
-    output_file: "{{ playbook_dir }}/../../files/vg_report.html"
+    output_file: "{{ playbook_dir }}/../../files/system_report.html"
 
   tasks:
     - name: Get primary group of the playbook runner
@@ -41,7 +31,7 @@
 
     - name: Create HTML report from template
       ansible.builtin.template:
-        src: templates/vg_report.html.j2
+        src: templates/system_report.html.j2
         dest: "{{ output_file }}"
         owner: "{{ lookup('env', 'USER') }}"
         group: "{{ primary_group.stdout }}"

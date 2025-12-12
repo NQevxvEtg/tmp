@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #dddddd; text-align: left; padding: 8px; }
+    th { background-color: #f2f2f2; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    .critical { color: red; font-weight: bold; }
+    .warning { color: orange; font-weight: bold; }
+</style>
+<title>System Resources Report</title>
+</head>
+<body>
+
+<h2>System CPU, RAM & Swap Report</h2>
+<p>Generated on: {{ ansible_date_time.date }} {{ ansible_date_time.time }}</p>
+
+<table>
+  <tr>
+    <th>Hostname</th>
+    <th>CPUs</th>
+    <th>Load Avg (1m, 5m, 15m)</th>
+    <th>RAM Total</th>
+    <th>RAM Free</th>
+    <th>RAM Used %</th>
+    <th>Swap Total</th>
+    <th>Swap Free</th>
+    <th>Swap Used %</th>
+  </tr>
+  {% for host in groups['all'] %}
+    {% set host_facts = hostvars[host] %}
+    {# Only process hosts that were successfully reached (have memory facts) #}
+    {% if host_facts['ansible_memtotal_mb'] is defined %}
+    <tr>
+        <td>{{ host }}</td>
+        
+        {# CPU Data #}
+        <td>{{ host_facts['ansible_processor_vcpus'] | default('N/A') }}</td>
+        <td>
+            {% if host_facts['ansible_loadavg'] is defined %}
+                {{ host_facts['ansible_loadavg']['1m'] }}, 
+                {{ host_facts['ansible_loadavg']['5m'] }}, 
+                {{ host_facts['ansible_loadavg']['15m'] }}
+            {% else %}
+                N/A
+            {% endif %}
+        </td>
+
+        {# RAM Data #}
+        <td>{{ host_facts['ansible_memtotal_mb'] }} MB</td>
+        <td>{{ host_facts['ansible_memfree_mb'] }} MB</td>
+        <td>
+            {% set ram_used_pct = (1 - (host_facts['ansible_memfree_mb'] / host_facts['ansible_memtotal_mb'])) * 100 %}
+            <span class="{% if ram_used_pct > 90 %}critical{% elif ram_used_pct > 75 %}warning{% endif %}">
+                {{ ram_used_pct | round(2) }}%
+            </span>
+        </td>
+
+        {# Swap Data #}
+        <td>{{ host_facts['ansible_swaptotal_mb'] }} MB</td>
+        <td>{{ host_facts['ansible_swapfree_mb'] }} MB</td>
+        <td>
+            {% if host_facts['ansible_swaptotal_mb'] > 0 %}
+                {% set swap_used_pct = (1 - (host_facts['ansible_swapfree_mb'] / host_facts['ansible_swaptotal_mb'])) * 100 %}
+                <span class="{% if swap_used_pct > 50 %}critical{% endif %}">
+                    {{ swap_used_pct | round(2) }}%
+                </span>
+            {% else %}
+                N/A (No Swap)
+            {% endif %}
+        </td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+</table>
+
+</body>
+</html>
