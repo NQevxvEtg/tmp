@@ -1,0 +1,31 @@
+---
+- name: Clean up directories
+  hosts: all
+  become: true
+  gather_facts: no
+  ignore_errors: yes
+  vars_files:
+    - ../../vaults/vbox_vault.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+    
+    # Default variables (can be overridden at runtime)
+    cleanup_dir: /var/tmp
+    cleanup_pattern: "dracut.*"
+
+  tasks:
+    - name: "Find directories in {{ cleanup_dir }} matching '{{ cleanup_pattern }}'"
+      ansible.builtin.find:
+        paths: "{{ cleanup_dir }}"
+        patterns: "{{ cleanup_pattern }}"
+        file_type: directory
+        recurse: no
+      register: matched_directories
+
+    - name: Delete the found directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ matched_directories.files }}"
+      loop_control:
+        label: "{{ item.path }}"
