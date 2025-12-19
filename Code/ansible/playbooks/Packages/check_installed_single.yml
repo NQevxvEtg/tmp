@@ -17,13 +17,22 @@
 
     - name: Filter and format package list
       set_fact:
-        # Extracts names and joins them with a semicolon to avoid CSV column confusion
         installed_names: "{{ dnf_result.results | selectattr('yumstate', 'equalto', 'installed') | map(attribute='name') | list | join('; ') }}"
+
+    - name: Get primary group of the playbook runner
+      ansible.builtin.command: id -gn {{ lookup('env', 'USER') }}
+      register: primary_group
+      changed_when: false
+      delegate_to: localhost
+      run_once: true  # Fixed: Only need to check this once
 
     - name: Ensure the output directory exists
       ansible.builtin.file:
         path: "{{ output_file | dirname }}"
         state: directory
+        owner: "{{ lookup('env', 'USER') }}"
+        group: "{{ primary_group.stdout }}"
+        mode: '0755'
       delegate_to: localhost
       run_once: true
 
@@ -32,13 +41,19 @@
         dest: "{{ output_file }}"
         content: "Hostname,Installed_Packages\n"
         force: yes
+        owner: "{{ lookup('env', 'USER') }}"
+        group: "{{ primary_group.stdout }}"
+        mode: '0644'
       delegate_to: localhost
       run_once: true
 
     - name: Append host data to CSV
       ansible.builtin.lineinfile:
         path: "{{ output_file }}"
-        # Using double quotes around the package list to handle potential spaces/special chars
         line: "{{ inventory_hostname }},\"{{ installed_names if installed_names != '' else 'None Found' }}\""
         insertafter: EOF
+        # Ensure the line update doesn't accidentally reset permissions
+        owner: "{{ lookup('env', 'USER') }}"
+        group: "{{ primary_group.stdout }}"
+        mode: '0644'
       delegate_to: localhost
