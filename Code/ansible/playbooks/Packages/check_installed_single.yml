@@ -26,15 +26,15 @@
       delegate_to: localhost
       run_once: true  # Fixed: Only need to check this once
 
-    - name: Ensure the output directory exists
-      ansible.builtin.file:
-        path: "{{ output_file | dirname }}"
-        state: directory
-        owner: "{{ lookup('env', 'USER') }}"
-        group: "{{ primary_group.stdout }}"
-        mode: '0755'
-      delegate_to: localhost
-      run_once: true
+    # - name: Ensure the output directory exists
+    #   ansible.builtin.file:
+    #     path: "{{ output_file | dirname }}"
+    #     state: directory
+    #     owner: "{{ lookup('env', 'USER') }}"
+    #     group: "{{ primary_group.stdout }}"
+    #     mode: '0755'
+    #   delegate_to: localhost
+    #   run_once: true
 
     - name: Initialize CSV Header
       ansible.builtin.copy:
