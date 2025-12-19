@@ -5,7 +5,7 @@
   
   vars_files:
     # Ensure this path is correct relative to your playbook location
-    - ../../vaults/vbox_vault.yml 
+    - ../../vaults/vault_vm.yml 
     
   vars:
     ansible_become_password: "{{ remote_host_become_pass }}"

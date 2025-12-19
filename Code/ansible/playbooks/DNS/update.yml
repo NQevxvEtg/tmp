@@ -4,7 +4,7 @@
   become: true
   gather_facts: true  # Required for ansible_play_hosts and hostvars
   vars_files:
-    - ../../vaults/vbox_vault.yml
+    - ../../vaults/vault_vm.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
     dns_servers: "8.8.8.8 8.8.4.4"  # Predefined DNS server IPs (e.g., Google DNS)

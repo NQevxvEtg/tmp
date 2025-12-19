@@ -5,7 +5,7 @@
   gather_facts: no
   ignore_errors: yes
   vars_files:
-    - ../../vaults/vbox_vault.yml
+    - ../../vaults/vault_vm.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
 
@@ -26,7 +26,7 @@
   hosts: localhost
   gather_facts: no
   vars_files:
-    - ../../vaults/vbox_vault.yml
+    - ../../vaults/vault_vm.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
     output_file: "{{ playbook_dir }}/../../files/vg_report.csv"

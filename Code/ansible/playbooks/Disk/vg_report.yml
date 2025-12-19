@@ -5,7 +5,7 @@
   gather_facts: no
   ignore_errors: yes  # Continue even if a host is down
   vars_files:
-    - ../../vaults/vbox_vault.yml
+    - ../../vaults/vault_vm.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
 
@@ -27,7 +27,7 @@
   hosts: localhost
   gather_facts: yes # Needed for date/time in report
   vars_files:
-    - ../../vaults/vbox_vault.yml
+    - ../../vaults/vault_vm.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
     output_file: "{{ playbook_dir }}/../../files/vg_report.html"

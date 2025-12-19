@@ -4,7 +4,7 @@
   become: yes
   gather_facts: true
   vars_files:
-    - ../../vaults/vbox_vault.yml
+    - ../../vaults/vault_vm.yml
   vars:
     ansible_become_password: "{{ remote_host_become_pass }}" 
     ansible_remote_tmp: /var/ansible_tmp

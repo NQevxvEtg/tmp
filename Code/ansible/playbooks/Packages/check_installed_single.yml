@@ -1,0 +1,29 @@
+---
+- name: Search for installed packages using wildcards
+  hosts: all
+  become: yes
+  vars_files:
+    - ../../vaults/vault_vm.yml
+  vars:
+    ansible_remote_tmp: /var/ansible_tmp
+    package_wildcard: "python3-lib*"  # Change this to your wildcard pattern
+
+  tasks:
+    - name: List installed packages matching the wildcard
+      ansible.builtin.dnf:
+        list: "{{ package_wildcard }}"
+      register: dnf_result
+
+    - name: Filter for installed packages only
+      set_fact:
+        installed_matches: "{{ dnf_result.results | selectattr('yumstate', 'equalto', 'installed') | list }}"
+
+    - name: Report findings
+      ansible.builtin.debug:
+        msg: >
+          {% if installed_matches | length > 0 %}
+          Found {{ installed_matches | length }} matching package(s): 
+          {{ installed_matches | map(attribute='name') | list }}
+          {% else %}
+          No packages matching '{{ package_wildcard }}' are currently installed.
+          {% endif %}
