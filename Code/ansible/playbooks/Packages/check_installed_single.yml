@@ -1,12 +1,13 @@
 ---
-- name: Search for installed packages using wildcards
+- name: Search for installed packages and generate CSV
   hosts: all
   become: yes
   vars_files:
     - ../../vaults/vault_vm.yml
   vars:
     ansible_remote_tmp: /var/ansible_tmp
-    package_wildcard: "python3-lib*"  # Change this to your wildcard pattern
+    package_wildcard: "python3-lib*"
+    output_file: "{{ playbook_dir }}/../../files/package_report.csv"
 
   tasks:
     - name: List installed packages matching the wildcard
@@ -14,16 +15,30 @@
         list: "{{ package_wildcard }}"
       register: dnf_result
 
-    - name: Filter for installed packages only
+    - name: Filter and format package list
       set_fact:
-        installed_matches: "{{ dnf_result.results | selectattr('yumstate', 'equalto', 'installed') | list }}"
+        # Extracts names and joins them with a semicolon to avoid CSV column confusion
+        installed_names: "{{ dnf_result.results | selectattr('yumstate', 'equalto', 'installed') | map(attribute='name') | list | join('; ') }}"
 
-    - name: Report findings
-      ansible.builtin.debug:
-        msg: >
-          {% if installed_matches | length > 0 %}
-          Found {{ installed_matches | length }} matching package(s): 
-          {{ installed_matches | map(attribute='name') | list }}
-          {% else %}
-          No packages matching '{{ package_wildcard }}' are currently installed.
-          {% endif %}
+    - name: Ensure the output directory exists
+      ansible.builtin.file:
+        path: "{{ output_file | dirname }}"
+        state: directory
+      delegate_to: localhost
+      run_once: true
+
+    - name: Initialize CSV Header
+      ansible.builtin.copy:
+        dest: "{{ output_file }}"
+        content: "Hostname,Installed_Packages\n"
+        force: yes
+      delegate_to: localhost
+      run_once: true
+
+    - name: Append host data to CSV
+      ansible.builtin.lineinfile:
+        path: "{{ output_file }}"
+        # Using double quotes around the package list to handle potential spaces/special chars
+        line: "{{ inventory_hostname }},\"{{ installed_names if installed_names != '' else 'None Found' }}\""
+        insertafter: EOF
+      delegate_to: localhost
