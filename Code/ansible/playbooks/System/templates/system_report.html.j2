@@ -76,5 +76,61 @@
   {% endfor %}
 </table>
 
+<h2>LVM Storage Report</h2>
+<p>Minimum Requirement: 15% Free Extents</p>
+<table>
+  <tr>
+    <th>Hostname</th>
+    <th>VG Name</th>
+    <th>VG Size (GB)</th>
+    <th>VG Free (GB)</th>
+    <th>Free %</th>
+    <th>Status</th>
+    <th>Additional Storage Req. (GB)</th>
+  </tr>
+  {% for host in groups['all'] %}
+    {% set host_facts = hostvars[host] %}
+    {% if host_facts['ansible_lvm'] is defined and host_facts['ansible_lvm']['vgs'] is defined %}
+      {% for vg_name, vg_info in host_facts['ansible_lvm']['vgs'].items() %}
+      <tr>
+        <td>{{ host }}</td>
+        <td>{{ vg_name }}</td>
+        <td>{{ vg_info['size_g'] }}</td>
+        <td>{{ vg_info['free_g'] }}</td>
+        <td>
+           {% set vg_size = vg_info['size_g'] | float %}
+           {% set vg_free = vg_info['free_g'] | float %}
+           {% if vg_size > 0 %}
+             {% set free_pct = (vg_free / vg_size) * 100 %}
+           {% else %}
+             {% set free_pct = 0 %}
+           {% endif %}
+           
+           <span class="{% if free_pct < 15 %}critical{% endif %}">
+             {{ free_pct | round(2) }}%
+           </span>
+        </td>
+        <td>
+           {% if free_pct < 15 %}
+             <span class="critical">CRITICAL</span>
+           {% else %}
+             <span style="color: green; font-weight: bold;">OK</span>
+           {% endif %}
+        </td>
+        <td>
+           {% if free_pct < 15 %}
+             {# Calculation: (F + X) >= 0.15(S + X) => X >= (0.15*S - F) / 0.85 #}
+             {% set needed_gb = (0.15 * vg_size - vg_free) / 0.85 %}
+             <span class="critical">{{ needed_gb | round(2) }} GB</span>
+           {% else %}
+             0 GB
+           {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% endif %}
+  {% endfor %}
+</table>
+
 </body>
 </html>

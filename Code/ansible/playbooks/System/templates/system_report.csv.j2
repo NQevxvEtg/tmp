@@ -14,3 +14,28 @@ Hostname,CPUs,Load 1m,Load 5m,Load 15m,RAM Total (MB),RAM Free (MB),RAM Used %,S
 {{ host }},{{ h['ansible_processor_vcpus']|default(0) }},{{ h['ansible_loadavg']['1m']|default(0) }},{{ h['ansible_loadavg']['5m']|default(0) }},{{ h['ansible_loadavg']['15m']|default(0) }},{{ h['ansible_memtotal_mb'] }},{{ h['ansible_memfree_mb'] }},{{ ram_used }}%,{{ h['ansible_swaptotal_mb'] }},{{ h['ansible_swapfree_mb'] }},{{ swap_used }}%{{ '\n' }}
 {%- endif -%}
 {% endfor %}
+
+Hostname,VG Name,VG Size (GB),VG Free (GB),Free %,Status,Additional Storage Req. (GB)
+{% for host in groups['all'] -%}
+{% set h = hostvars[host] -%}
+{% if h['ansible_lvm'] is defined and h['ansible_lvm']['vgs'] is defined -%}
+{% for vg_name, vg_info in h['ansible_lvm']['vgs'].items() -%}
+{% set vg_size = vg_info['size_g'] | float -%}
+{% set vg_free = vg_info['free_g'] | float -%}
+{% if vg_size > 0 -%}
+  {% set free_pct = (vg_free / vg_size) * 100 -%}
+{% else -%}
+  {% set free_pct = 0 -%}
+{% endif -%}
+{% if free_pct < 15 -%}
+  {% set status = "CRITICAL" -%}
+  {# (F + X) >= 0.15(S + X) => X >= (0.15*S - F) / 0.85 #}
+  {% set needed = ((0.15 * vg_size - vg_free) / 0.85) | round(2) -%}
+{% else -%}
+  {% set status = "OK" -%}
+  {% set needed = 0 -%}
+{% endif -%}
+{{ host }},{{ vg_name }},{{ vg_size }},{{ vg_free }},{{ free_pct | round(2) }}%,{{ status }},{{ needed }}
+{% endfor -%}
+{% endif -%}
+{% endfor %}
