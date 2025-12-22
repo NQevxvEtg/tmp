@@ -82,6 +82,7 @@
   <tr>
     <th>Hostname</th>
     <th>VG Name</th>
+    <th>VG Devices</th>
     <th>VG Size (GB)</th>
     <th>VG Free (GB)</th>
     <th>Free %</th>
@@ -95,6 +96,17 @@
       <tr>
         <td>{{ host }}</td>
         <td>{{ vg_name }}</td>
+        <td>
+           {% set pvs = [] %}
+           {% if host_facts['ansible_lvm']['pvs'] is defined %}
+             {% for pv_name, pv_info in host_facts['ansible_lvm']['pvs'].items() %}
+               {% if pv_info['vg'] == vg_name %}
+                 {% set _ = pvs.append(pv_name) %}
+               {% endif %}
+             {% endfor %}
+           {% endif %}
+           {{ pvs | join(', ') }}
+        </td>
         <td>{{ vg_info['size_g'] }}</td>
         <td>{{ vg_info['free_g'] }}</td>
         <td>

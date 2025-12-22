@@ -15,7 +15,7 @@ Hostname,CPUs,Load 1m,Load 5m,Load 15m,RAM Total (MB),RAM Free (MB),RAM Used %,S
 {%- endif -%}
 {% endfor %}
 
-Hostname,VG Name,VG Size (GB),VG Free (GB),Free %,Status,Additional Storage Req. (GB)
+Hostname,VG Name,VG Devices,VG Size (GB),VG Free (GB),Free %,Status,Additional Storage Req. (GB)
 {% for host in groups['all'] -%}
 {% set h = hostvars[host] -%}
 {% if h['ansible_lvm'] is defined and h['ansible_lvm']['vgs'] is defined -%}
@@ -35,7 +35,15 @@ Hostname,VG Name,VG Size (GB),VG Free (GB),Free %,Status,Additional Storage Req.
   {% set status = "OK" -%}
   {% set needed = 0 -%}
 {% endif -%}
-{{ host }},{{ vg_name }},{{ vg_size }},{{ vg_free }},{{ free_pct | round(2) }}%,{{ status }},{{ needed }}
+{% set pvs = [] -%}
+{% if h['ansible_lvm']['pvs'] is defined -%}
+  {% for pv_name, pv_info in h['ansible_lvm']['pvs'].items() -%}
+    {% if pv_info['vg'] == vg_name -%}
+      {% set _ = pvs.append(pv_name) -%}
+    {% endif -%}
+  {% endfor -%}
+{% endif -%}
+{{ host }},{{ vg_name }},{{ pvs | join(' ') }},{{ vg_size }},{{ vg_free }},{{ free_pct | round(2) }}%,{{ status }},{{ needed }}
 {% endfor -%}
 {% endif -%}
 {% endfor %}
